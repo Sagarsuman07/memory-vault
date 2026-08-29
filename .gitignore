@@ -1,0 +1,14 @@
+.venv/
+mvenv
+.env
+__pycache__/
+*.pyc
+
+uploads/*
+!uploads/.gitkeep
+
+*.db
+*.sqlite
+*.sqlite3
+
+.chroma/

@@ -1,0 +1,8 @@
+python-dotenv
+langchain
+langchain-core
+langgraph
+chromadb
+sqlalchemy
+pydantic
+langsmith
