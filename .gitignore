@@ -1,6 +1,7 @@
 .venv/
 mvenv
 .env
+Documentation
 __pycache__/
 *.pyc
 
