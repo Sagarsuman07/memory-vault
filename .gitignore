@@ -8,8 +8,10 @@ __pycache__/
 uploads/*
 !uploads/.gitkeep
 
-*.db
+memory_vault.db
 *.sqlite
 *.sqlite3
 
 .chroma/
+
+.streamlit/secrets.toml
