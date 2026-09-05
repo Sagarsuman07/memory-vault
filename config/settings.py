@@ -46,5 +46,10 @@ class Settings:
         "whisper-large-v3-turbo"
     )
 
+    GROQ_LLM_MODEL = os.getenv(
+    "GROQ_LLM_MODEL",
+    "llama-3.3-70b-versatile"
+    )
+
 
 settings = Settings()
