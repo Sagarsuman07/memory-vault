@@ -439,3 +439,187 @@ def delete_memory(
 
 
     return deleted
+
+
+
+
+# -----------------------------------------
+# Answer Question through LLM
+# -----------------------------------------
+
+from langchain_groq import ChatGroq
+
+from prompts.qa import QA_PROMPT
+
+from rag.retriever import retrieve
+
+from rag.grounding import (
+    get_grounded_results,
+)
+
+from config.settings import settings
+
+
+# Get Model
+
+def get_qa_model():
+
+    if not settings.GROQ_API_KEY:
+
+        raise ValueError(
+            "GROQ_API_KEY is not configured."
+        )
+
+    return ChatGroq(
+        model=settings.GROQ_LLM_MODEL,
+        temperature=0,
+        api_key=settings.GROQ_API_KEY,
+    )
+
+
+# Build context
+
+def build_context(
+    grounded_results
+):
+
+    context_parts = []
+
+    for rank, (document, distance) in enumerate(
+        grounded_results,
+        start=1
+    ):
+
+        context_parts.append(
+            f"""
+Source {rank}
+Memory ID: {document.metadata['memory_id']}
+Memory Type: {document.metadata['memory_type']}
+Chunk: {document.metadata['chunk_index']}
+
+Content:
+{document.page_content}
+"""
+        )
+
+    return "\n\n".join(
+        context_parts
+    )
+
+
+
+# -----------------------------------------
+# Implement question answering
+# -----------------------------------------
+
+def answer_question(
+    question: str,
+    user_id: str,
+    memory_id: str | None = None,
+):
+
+    if not question or not question.strip():
+
+        raise ValueError(
+            "Question cannot be empty."
+        )
+
+
+    # -----------------------------------------
+    # 1. Retrieve
+    # -----------------------------------------
+
+    results = retrieve(
+        question=question,
+        user_id=user_id,
+        top_k=3,
+        memory_id=memory_id,
+    )
+
+
+    # -----------------------------------------
+    # 2. Grounding check
+    # -----------------------------------------
+
+    grounded_results = get_grounded_results(
+        results
+    )
+
+
+    if not grounded_results:
+
+        return {
+            "answer": (
+                "This information wasn't found "
+                "in your memory."
+            ),
+            "sources": [],
+            "grounded": False,
+        }
+
+
+    # -----------------------------------------
+    # 3. Build context
+    # -----------------------------------------
+
+    context = build_context(
+        grounded_results
+    )
+
+
+    # -----------------------------------------
+    # 4. Create LLM
+    # -----------------------------------------
+
+    model = get_qa_model()
+
+
+    # -----------------------------------------
+    # 5. Build prompt
+    # -----------------------------------------
+
+    messages = QA_PROMPT.format_messages(
+        context=context,
+        question=question,
+    )
+
+
+    # -----------------------------------------
+    # 6. Generate answer
+    # -----------------------------------------
+
+    response = model.invoke(
+        messages
+    )
+
+
+    # -----------------------------------------
+    # 7. Return answer + sources
+    # -----------------------------------------
+
+    sources = []
+
+    for document, distance in grounded_results:
+
+        sources.append(
+            {
+                "memory_id":
+                    document.metadata["memory_id"],
+
+                "memory_type":
+                    document.metadata["memory_type"],
+
+                "chunk_index":
+                    document.metadata["chunk_index"],
+
+                "distance":
+                    distance,
+            }
+        )
+
+
+    return {
+        "answer": response.content,
+        "sources": sources,
+        "grounded": True,
+    }

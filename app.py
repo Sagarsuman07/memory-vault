@@ -14,6 +14,15 @@ from memory.memory_service import (
 )
 
 
+from memory.memory_service import (
+    create_new_memory,
+    list_memories,
+    update_memory,
+    delete_memory,
+    answer_question,
+)
+
+
 # ============================================================
 # Page Configuration
 # ============================================================
@@ -395,3 +404,83 @@ else:
                     st.error(
                         f"Something went wrong: {error}"
                     )
+
+
+
+# ============================================================
+# Question and Answer
+# ============================================================
+
+st.divider()
+
+st.header(
+    "Ask Your Memories"
+)
+
+
+question = st.text_input(
+    "Ask a question about your memories",
+    placeholder="e.g. What is the price of the iPhone?"
+)
+
+
+if st.button(
+    "Ask",
+    type="primary"
+):
+
+    if not question.strip():
+
+        st.warning(
+            "Please enter a question."
+        )
+
+    else:
+
+        try:
+
+            result = answer_question(
+                question=question,
+                user_id=USER_ID,
+            )
+
+
+            st.subheader(
+                "Answer"
+            )
+
+            st.write(
+                result["answer"]
+            )
+
+
+            if result["grounded"]:
+
+                st.subheader(
+                    "Sources"
+                )
+
+
+                for source in result["sources"]:
+
+                    st.write(
+                        f"- Memory ID: "
+                        f"`{source['memory_id']}`"
+                    )
+
+                    st.write(
+                        f"  Chunk: "
+                        f"`{source['chunk_index']}`"
+                    )
+
+                    st.write(
+                        f"  Distance: "
+                        f"`{source['distance']:.4f}`"
+                    )
+
+
+        except Exception as error:
+
+            st.error(
+                f"Something went wrong while answering your question: {error}"
+            )
