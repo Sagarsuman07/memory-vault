@@ -2,9 +2,18 @@ from database.database import get_connection
 from database.models import Memory
 
 
-def create_memory(memory: Memory):
+# ============================================================
+# CREATE
+# ============================================================
+
+def create_memory(
+    memory: Memory
+):
+
     connection = get_connection()
+
     cursor = connection.cursor()
+
 
     cursor.execute(
         """
@@ -15,11 +24,12 @@ def create_memory(memory: Memory):
             title,
             file_name,
             file_path,
+            summary,
             extracted_text,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             memory.id,
@@ -28,40 +38,32 @@ def create_memory(memory: Memory):
             memory.title,
             memory.file_name,
             memory.file_path,
+            memory.summary,
             memory.extracted_text,
             memory.created_at,
             memory.updated_at,
         ),
     )
 
+
     connection.commit()
-    connection.close()
-
-
-def get_all_memories(user_id: str):
-    connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT *
-        FROM memories
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        """,
-        (user_id,),
-    )
-
-    memories = cursor.fetchall()
 
     connection.close()
 
-    return memories
 
+# ============================================================
+# GET ONE MEMORY
+# ============================================================
 
-def get_memory(memory_id: str, user_id: str):
+def get_memory(
+    memory_id: str,
+    user_id: str
+):
+
     connection = get_connection()
+
     cursor = connection.cursor()
+
 
     cursor.execute(
         """
@@ -76,6 +78,7 @@ def get_memory(memory_id: str, user_id: str):
         ),
     )
 
+
     memory = cursor.fetchone()
 
     connection.close()
@@ -83,9 +86,93 @@ def get_memory(memory_id: str, user_id: str):
     return memory
 
 
-def delete_memory(memory_id: str, user_id: str):
+# ============================================================
+# LIST MEMORIES
+# ============================================================
+
+def get_all_memories(
+    user_id: str
+):
+
     connection = get_connection()
+
     cursor = connection.cursor()
+
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM memories
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    )
+
+
+    memories = cursor.fetchall()
+
+    connection.close()
+
+    return memories
+
+
+# ============================================================
+# UPDATE MEMORY
+# ============================================================
+
+def update_memory(
+    memory_id: str,
+    user_id: str,
+    title: str,
+    summary: str
+):
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+
+    cursor.execute(
+        """
+        UPDATE memories
+        SET title = ?,
+            summary = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        AND user_id = ?
+        """,
+        (
+            title,
+            summary,
+            memory_id,
+            user_id,
+        ),
+    )
+
+
+    connection.commit()
+
+    rows_updated = cursor.rowcount
+
+    connection.close()
+
+    return rows_updated > 0
+
+
+# ============================================================
+# DELETE MEMORY
+# ============================================================
+
+def delete_memory(
+    memory_id: str,
+    user_id: str
+):
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
 
     cursor.execute(
         """
@@ -99,5 +186,11 @@ def delete_memory(memory_id: str, user_id: str):
         ),
     )
 
+
     connection.commit()
+
+    rows_deleted = cursor.rowcount
+
     connection.close()
+
+    return rows_deleted > 0

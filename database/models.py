@@ -10,6 +10,7 @@ class Memory:
     title: str
     file_name: str
     file_path: str
+    summary: Optional[str]
     extracted_text: Optional[str]
     created_at: str
     updated_at: str
