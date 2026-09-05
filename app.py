@@ -3,22 +3,18 @@ import streamlit as st
 from config.settings import settings
 
 from database.database import (
-    initialize_database
+    initialize_database,
 )
 
 from database.repositories import (
-    get_all_memories
+    get_all_memories,
 )
 
 from memory.memory_service import (
     create_new_memory,
-    delete_memory
+    delete_memory,
 )
 
-
-# ==================================================
-# Page Configuration
-# ==================================================
 
 st.set_page_config(
     page_title="Memory Vault",
@@ -27,22 +23,14 @@ st.set_page_config(
 )
 
 
-# ==================================================
-# Application Initialization
-# ==================================================
-
+# Initialize database.
 initialize_database()
+
 
 USER_ID = settings.DEMO_USER_ID
 
 
-# ==================================================
-# Header
-# ==================================================
-
-st.title(
-    "🧠 Memory Vault"
-)
+st.title("🧠 Memory Vault")
 
 st.write(
     "Your personal AI memory assistant."
@@ -51,20 +39,32 @@ st.write(
 st.divider()
 
 
-# ==================================================
-# Upload Section
-# ==================================================
+# ============================================================
+# Upload Memory
+# ============================================================
 
-st.header(
-    "Upload a Memory"
-)
+st.header("Upload a Memory")
 
 
 uploaded_file = st.file_uploader(
-    "Choose a PDF or TXT file",
+    "Choose a memory file",
     type=[
         "pdf",
-        "txt"
+        "docx",
+        "txt",
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "gif",
+        "mp3",
+        "wav",
+        "m4a",
+        "mpeg",
+        "mpga",
+        "webm",
+        "ogg",
+        "flac",
     ],
 )
 
@@ -77,32 +77,21 @@ title = st.text_input(
 
 if st.button(
     "Save Memory",
-    type="primary"
+    type="primary",
 ):
 
-    # ----------------------------------------------
-    # Validate title/file from UI
-    # ----------------------------------------------
-
     if uploaded_file is None:
-
         st.warning(
-            "Please select a PDF or TXT file."
+            "Please select a memory file."
         )
 
     elif not title.strip():
-
         st.warning(
             "Please enter a memory title."
         )
 
     else:
-
         try:
-
-            # --------------------------------------
-            # Create memory
-            # --------------------------------------
 
             memory = create_new_memory(
                 uploaded_file=uploaded_file,
@@ -110,24 +99,18 @@ if st.button(
                 user_id=USER_ID,
             )
 
-
             st.success(
                 f"Memory '{memory.title}' "
                 "saved successfully."
             )
 
-
-            # Refresh dashboard
-
             st.rerun()
-
 
         except ValueError as error:
 
             st.error(
                 str(error)
             )
-
 
         except Exception as error:
 
@@ -139,13 +122,11 @@ if st.button(
 st.divider()
 
 
-# ==================================================
-# Memory Dashboard
-# ==================================================
+# ============================================================
+# Memories
+# ============================================================
 
-st.header(
-    "My Memories"
-)
+st.header("My Memories")
 
 
 memories = get_all_memories(
@@ -159,7 +140,6 @@ if not memories:
         "You haven't uploaded any memories yet."
     )
 
-
 else:
 
     for memory in memories:
@@ -168,49 +148,42 @@ else:
             border=True
         ):
 
-            # --------------------------------------
-            # Memory Title
-            # --------------------------------------
+            # Choose an icon based on memory type.
+            if memory["memory_type"] == "document":
+                icon = "📄"
+
+            elif memory["memory_type"] == "image":
+                icon = "🖼️"
+
+            elif memory["memory_type"] == "audio":
+                icon = "🎵"
+
+            else:
+                icon = "🧠"
 
             st.subheader(
-                f"📄 {memory['title']}"
+                f"{icon} {memory['title']}"
             )
-
-
-            # --------------------------------------
-            # Metadata columns
-            # --------------------------------------
 
             col1, col2, col3 = st.columns(3)
 
-
             with col1:
-
                 st.write(
                     f"**Type:** "
                     f"{memory['memory_type'].upper()}"
                 )
 
-
             with col2:
-
                 st.write(
                     f"**File:** "
                     f"{memory['file_name']}"
                 )
 
-
             with col3:
-
                 st.write(
                     f"**Created:** "
                     f"{memory['created_at']}"
                 )
-
-
-            # --------------------------------------
-            # Memory Details
-            # --------------------------------------
 
             with st.expander(
                 "Memory Details"
@@ -226,10 +199,13 @@ else:
                     f"`{memory['file_path']}`"
                 )
 
+                st.write(
+                    "**Extracted Content:**"
+                )
 
-            # --------------------------------------
-            # Delete Memory
-            # --------------------------------------
+                st.text(
+                    memory["extracted_text"]
+                )
 
             if st.button(
                 "Delete Memory",
@@ -240,7 +216,6 @@ else:
                     memory_id=memory["id"],
                     user_id=USER_ID,
                 )
-
 
                 if deleted:
 

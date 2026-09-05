@@ -3,9 +3,7 @@ from database.models import Memory
 
 
 def create_memory(memory: Memory):
-
     connection = get_connection()
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -17,10 +15,11 @@ def create_memory(memory: Memory):
             title,
             file_name,
             file_path,
+            extracted_text,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             memory.id,
@@ -29,20 +28,18 @@ def create_memory(memory: Memory):
             memory.title,
             memory.file_name,
             memory.file_path,
+            memory.extracted_text,
             memory.created_at,
             memory.updated_at,
         ),
     )
 
     connection.commit()
-
     connection.close()
 
 
 def get_all_memories(user_id: str):
-
     connection = get_connection()
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -62,13 +59,8 @@ def get_all_memories(user_id: str):
     return memories
 
 
-def get_memory(
-    memory_id: str,
-    user_id: str
-):
-
+def get_memory(memory_id: str, user_id: str):
     connection = get_connection()
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -91,13 +83,8 @@ def get_memory(
     return memory
 
 
-def delete_memory(
-    memory_id: str,
-    user_id: str
-):
-
+def delete_memory(memory_id: str, user_id: str):
     connection = get_connection()
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -113,5 +100,4 @@ def delete_memory(
     )
 
     connection.commit()
-
     connection.close()
