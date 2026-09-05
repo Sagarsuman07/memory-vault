@@ -46,5 +46,10 @@ class Settings:
         "whisper-large-v3-turbo"
     )
 
+    GROQ_LLM_MODEL = os.getenv(
+        "GROQ_LLM_MODEL",
+        "openai/gpt-oss-120b"
+    )
+
 
 settings = Settings()
