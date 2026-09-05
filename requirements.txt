@@ -7,11 +7,17 @@
 #pydantic
 #langsmith
 
-streamlit
-python-dotenv
+#streamlit
+#python-dotenv
 
-ollama
-groq
+#ollama
+#groq
 
-PyMuPDF
-python-docx
+#PyMuPDF
+#python-docx
+
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-huggingface
+sentence-transformers

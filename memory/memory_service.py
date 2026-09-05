@@ -21,6 +21,57 @@ from ingestion.pipeline import (
 
 
 # ============================================================
+# Phase 3 to Phase 4 transition
+# ============================================================
+
+
+
+from rag.chunker import split_text
+from rag.vector_store import index_memory
+
+def index_existing_memory(
+    memory_id: str,
+    user_id: str,
+):
+
+    memory = get_memory(
+        memory_id,
+        user_id
+    )
+
+    if memory is None:
+
+        raise ValueError(
+            "Memory not found."
+        )
+
+    extracted_text = memory["extracted_text"]
+
+    if not extracted_text:
+        raise ValueError(
+            "Memory has no extracted content."
+        )
+
+    chunks = split_text(
+        extracted_text
+    )
+
+    if not chunks:
+        raise ValueError(
+            "No chunks could be created."
+        )
+
+    indexed_count = index_memory(
+        memory_id=memory["id"],
+        user_id=memory["user_id"],
+        memory_type=memory["memory_type"],
+        chunks=chunks,
+    )
+
+    return indexed_count
+
+
+# ============================================================
 # Configuration
 # ============================================================
 
