@@ -8,6 +8,10 @@ load_dotenv()
 
 class Settings:
 
+    # ========================================================
+    # Application
+    # ========================================================
+
     APP_ENV = os.getenv(
         "APP_ENV",
         "development",
@@ -26,6 +30,16 @@ class Settings:
     UPLOAD_DIR = os.getenv(
         "UPLOAD_DIR",
         "uploads",
+    )
+
+
+    # ========================================================
+    # LangGraph Checkpoint Database
+    # ========================================================
+
+    CHECKPOINT_DATABASE_PATH = os.getenv(
+        "CHECKPOINT_DATABASE_PATH",
+        "memory_vault_checkpoints.sqlite",
     )
 
 

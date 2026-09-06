@@ -1,3 +1,6 @@
+import sqlite3
+import uuid
+
 from langgraph.graph import (
     StateGraph,
     START,
@@ -9,6 +12,8 @@ from langgraph.prebuilt import (
     tools_condition,
 )
 
+from langgraph.checkpoint.sqlite import SqliteSaver
+
 from agent.state import AgentState
 
 from agent.nodes import (
@@ -18,6 +23,47 @@ from agent.nodes import (
 )
 
 from agent.tools import create_tools
+
+from config.settings import settings
+
+
+# ============================================================
+# Persistent LangGraph Checkpointer
+# ============================================================
+
+_checkpoint_connection = sqlite3.connect(
+    settings.CHECKPOINT_DATABASE_PATH,
+    check_same_thread=False,
+)
+
+_checkpointer = SqliteSaver(
+    _checkpoint_connection
+)
+
+_checkpointer.setup()
+
+
+# ============================================================
+# Thread ID
+# ============================================================
+
+def create_thread_id(
+    user_id: str,
+) -> str:
+
+    return (
+        f"{user_id}:"
+        f"{uuid.uuid4()}"
+    )
+
+
+def get_default_thread_id(
+    user_id: str,
+) -> str:
+
+    return (
+        f"{user_id}:default"
+    )
 
 
 # ============================================================
@@ -29,7 +75,7 @@ def build_agent_graph(
 ):
 
     # ========================================================
-    # Create tools for the current user
+    # Create tools for current user
     # ========================================================
 
     tools = create_tools(
@@ -138,19 +184,22 @@ def build_agent_graph(
 
 
     # ========================================================
-    # Compile
+    # Compile with Checkpointer
     # ========================================================
 
-    return graph_builder.compile()
+    return graph_builder.compile(
+        checkpointer=_checkpointer
+    )
 
 
 # ============================================================
-# Run Agent
+# Run LangGraph Agent
 # ============================================================
 
 def run_langgraph_agent(
     question: str,
     user_id: str,
+    thread_id: str,
 ):
 
     if not question or not question.strip():
@@ -160,12 +209,40 @@ def run_langgraph_agent(
         )
 
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not thread_id or not thread_id.strip():
+
+        raise ValueError(
+            "Thread ID cannot be empty."
+        )
+
+
+    # ========================================================
+    # Build graph
+    # ========================================================
+
     graph = build_agent_graph(
         user_id=user_id
     )
 
 
-    initial_state = {
+    # ========================================================
+    # New message
+    #
+    # Important:
+    # We only provide the NEW user message.
+    #
+    # The checkpointer restores previous messages
+    # belonging to this thread.
+    # ========================================================
+
+    input_state = {
         "messages": [
             {
                 "role": "user",
@@ -179,22 +256,86 @@ def run_langgraph_agent(
     }
 
 
+    # ========================================================
+    # Thread configuration
+    # ========================================================
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+
+    # ========================================================
+    # Execute graph
+    # ========================================================
+
     result = graph.invoke(
-        initial_state
+        input_state,
+        config,
     )
 
+
+    # ========================================================
+    # Return result
+    # ========================================================
 
     return {
         "answer": result.get(
             "final_answer",
             "",
         ),
+
         "tool_calls": result.get(
             "tool_calls",
             [],
         ),
+
         "messages": result.get(
             "messages",
             [],
         ),
+
+        "thread_id": thread_id,
     }
+
+
+# ============================================================
+# Get Conversation State
+# ============================================================
+
+def get_thread_state(
+    user_id: str,
+    thread_id: str,
+):
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not thread_id or not thread_id.strip():
+
+        raise ValueError(
+            "Thread ID cannot be empty."
+        )
+
+
+    graph = build_agent_graph(
+        user_id=user_id
+    )
+
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+
+    return graph.get_state(
+        config
+    )

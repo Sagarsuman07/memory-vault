@@ -14,7 +14,12 @@ from memory.memory_service import (
 )
 
 from agent.tools import run_tool_calling
-from agent.graph import run_langgraph_agent
+from agent.graph import (
+    run_langgraph_agent,
+    create_thread_id,
+    get_default_thread_id,
+    get_thread_state,
+)
 
 # ============================================================
 # Page Configuration
@@ -716,7 +721,7 @@ if st.button(
 
 
 # ============================================================
-# LangGraph Agent
+# LangGraph Agent — Short-Term Memory
 # ============================================================
 
 st.divider()
@@ -726,96 +731,168 @@ st.header(
 )
 
 st.write(
-    "The LangGraph agent can decide which tools "
-    "to use and can execute multiple tools when needed."
+    "This agent maintains short-term conversational "
+    "memory using LangGraph threads and a persistent "
+    "SQLite checkpointer."
 )
 
 
-langgraph_question = st.text_input(
-    "Ask the LangGraph agent",
-    placeholder=(
-        "e.g. What is the total price of my saved products?"
-    ),
-    key="langgraph_question",
-)
+# ============================================================
+# Initialize Conversation Thread
+# ============================================================
 
+if "langgraph_thread_id" not in st.session_state:
+
+    st.session_state.langgraph_thread_id = (
+        get_default_thread_id(
+            USER_ID
+        )
+    )
+
+
+# ============================================================
+# New Conversation
+# ============================================================
 
 if st.button(
-    "Ask LangGraph Agent",
-    type="primary",
-    key="ask_langgraph_agent",
+    "New Conversation",
+    key="new_langgraph_conversation",
 ):
 
-    if not langgraph_question.strip():
-
-        st.warning(
-            "Please enter a question."
+    st.session_state.langgraph_thread_id = (
+        create_thread_id(
+            USER_ID
         )
+    )
 
-    else:
-
-        try:
-
-            with st.spinner(
-                "LangGraph agent is working..."
-            ):
-
-                result = run_langgraph_agent(
-                    question=langgraph_question,
-                    user_id=USER_ID,
-                )
+    st.rerun()
 
 
-            # ------------------------------------------------
-            # Final Answer
-            # ------------------------------------------------
+# ============================================================
+# Current Thread
+# ============================================================
 
-            st.subheader(
-                "Answer"
-            )
+st.caption(
+    "Current conversation: "
+    f"`{st.session_state.langgraph_thread_id}`"
+)
+
+
+# ============================================================
+# Load Conversation History
+# ============================================================
+
+try:
+
+    thread_state = get_thread_state(
+        user_id=USER_ID,
+        thread_id=(
+            st.session_state.langgraph_thread_id
+        ),
+    )
+
+
+    conversation_messages = (
+        thread_state.values.get(
+            "messages",
+            [],
+        )
+    )
+
+except Exception:
+
+    conversation_messages = []
+
+
+# ============================================================
+# Display Conversation History
+# ============================================================
+
+for message in conversation_messages:
+
+    message_type = getattr(
+        message,
+        "type",
+        "",
+    )
+
+
+    # --------------------------------------------------------
+    # Human Message
+    # --------------------------------------------------------
+
+    if message_type == "human":
+
+        with st.chat_message(
+            "user"
+        ):
 
             st.write(
-                result["answer"]
+                message.content
             )
 
 
-            # ------------------------------------------------
-            # Tool Calls
-            # ------------------------------------------------
+    # --------------------------------------------------------
+    # AI Message
+    # --------------------------------------------------------
 
-            if result["tool_calls"]:
+    elif message_type == "ai":
 
-                st.subheader(
-                    "Tool Calls"
+        content = message.content
+
+
+        if content:
+
+            with st.chat_message(
+                "assistant"
+            ):
+
+                st.write(
+                    content
                 )
 
 
-                for index, call in enumerate(
-                    result["tool_calls"],
-                    start=1,
-                ):
+# ============================================================
+# Chat Input
+# ============================================================
 
-                    st.write(
-                        f"**Tool {index}:** "
-                        f"`{call['tool']}`"
-                    )
+langgraph_question = st.chat_input(
+    "Ask Memory Vault anything..."
+)
 
 
-                    st.json(
-                        call["arguments"]
-                    )
+# ============================================================
+# Run Agent
+# ============================================================
 
+if langgraph_question:
 
-            else:
+    try:
 
-                st.info(
-                    "No tool was required."
-                )
+        with st.spinner(
+            "Memory Vault is thinking..."
+        ):
 
-
-        except Exception as error:
-
-            st.error(
-                "Something went wrong while running "
-                f"the LangGraph agent: {error}"
+            result = run_langgraph_agent(
+                question=langgraph_question,
+                user_id=USER_ID,
+                thread_id=(
+                    st.session_state
+                    .langgraph_thread_id
+                ),
             )
+
+
+        # ----------------------------------------------------
+        # Final Answer
+        # ----------------------------------------------------
+
+        st.rerun()
+
+
+    except Exception as error:
+
+        st.error(
+            "Something went wrong while running "
+            f"the LangGraph agent: {error}"
+        )
