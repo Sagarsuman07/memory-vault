@@ -22,6 +22,7 @@ from ingestion.pipeline import (
 )
 
 from prompts.qa import QA_PROMPT
+from prompts.summary import SUMMARY_PROMPT
 
 from rag.chunker import split_text
 
@@ -49,7 +50,6 @@ UPLOAD_DIR.mkdir(
 
 
 ALLOWED_EXTENSIONS = {
-
     # Documents
     ".pdf",
     ".docx",
@@ -180,12 +180,13 @@ def create_new_memory(
         if not extracted_text or not extracted_text.strip():
 
             raise ValueError(
-                "No content could be extracted from the file."
+                "No content could be extracted "
+                "from the file."
             )
 
 
         # ====================================================
-        # Create Memory object
+        # Create memory object
         # ====================================================
 
         now = datetime.now(
@@ -208,7 +209,7 @@ def create_new_memory(
 
 
         # ====================================================
-        # Save memory in SQLite
+        # Save to database
         # ====================================================
 
         create_memory(
@@ -228,7 +229,8 @@ def create_new_memory(
         if not chunks:
 
             raise ValueError(
-                "No chunks could be created for indexing."
+                "No chunks could be created "
+                "for indexing."
             )
 
 
@@ -469,6 +471,196 @@ def get_qa_model():
         model=settings.GROQ_LLM_MODEL,
         temperature=0,
         api_key=settings.GROQ_API_KEY,
+    )
+
+
+# ============================================================
+# Summary Model
+# ============================================================
+
+def get_summary_model():
+
+    if not settings.GROQ_API_KEY:
+
+        raise ValueError(
+            "GROQ_API_KEY is not configured."
+        )
+
+
+    return ChatGroq(
+        model=settings.GROQ_LLM_MODEL,
+        temperature=0,
+        api_key=settings.GROQ_API_KEY,
+    )
+
+
+# ============================================================
+# Generate Memory Summary
+# ============================================================
+
+def generate_memory_summary(
+    memory_id: str,
+    user_id: str,
+):
+
+    # ========================================================
+    # 1. Get memory
+    # ========================================================
+
+    memory = get_memory(
+        memory_id,
+        user_id,
+    )
+
+
+    if memory is None:
+
+        raise ValueError(
+            "Memory not found."
+        )
+
+
+    # ========================================================
+    # 2. Get extracted content
+    # ========================================================
+
+    extracted_text = memory[
+        "extracted_text"
+    ]
+
+
+    if not extracted_text or not extracted_text.strip():
+
+        raise ValueError(
+            "Memory has no extracted content "
+            "to summarize."
+        )
+
+
+    # ========================================================
+    # 3. Create summary model
+    # ========================================================
+
+    model = get_summary_model()
+
+
+    # ========================================================
+    # 4. Build prompt
+    # ========================================================
+
+    messages = SUMMARY_PROMPT.format_messages(
+        extracted_text=extracted_text,
+    )
+
+
+    # ========================================================
+    # 5. Generate title + summary
+    # ========================================================
+
+    response = model.invoke(
+        messages
+    )
+
+
+    generated_text = response.content.strip()
+
+
+    if not generated_text:
+
+        raise ValueError(
+            "The LLM returned an empty summary."
+        )
+
+
+    # ========================================================
+    # 6. Parse title and summary
+    # ========================================================
+
+    title_marker = "TITLE:"
+    summary_marker = "SUMMARY:"
+
+
+    if (
+        title_marker not in generated_text
+        or summary_marker not in generated_text
+    ):
+
+        raise ValueError(
+            "The LLM returned an unexpected "
+            "summary format."
+        )
+
+
+    title_start = (
+        generated_text.index(
+            title_marker
+        )
+        + len(title_marker)
+    )
+
+
+    summary_start = generated_text.index(
+        summary_marker
+    )
+
+
+    generated_title = (
+        generated_text[
+            title_start:summary_start
+        ]
+        .strip()
+    )
+
+
+    generated_summary = (
+        generated_text[
+            summary_start
+            + len(summary_marker):
+        ]
+        .strip()
+    )
+
+
+    if not generated_title:
+
+        raise ValueError(
+            "The generated title is empty."
+        )
+
+
+    if not generated_summary:
+
+        raise ValueError(
+            "The generated summary is empty."
+        )
+
+
+    # ========================================================
+    # 7. Save title + summary
+    # ========================================================
+
+    updated = update_memory_record(
+        memory_id=memory_id,
+        user_id=user_id,
+        title=generated_title,
+        summary=generated_summary,
+    )
+
+
+    if not updated:
+
+        raise ValueError(
+            "Memory could not be updated."
+        )
+
+
+    # ========================================================
+    # 8. Return updated memory
+    # ========================================================
+
+    return get_memory(
+        memory_id,
+        user_id,
     )
 
 

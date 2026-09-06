@@ -10,6 +10,7 @@ from memory.memory_service import (
     update_memory,
     delete_memory,
     answer_question,
+    generate_memory_summary,
 )
 
 
@@ -121,7 +122,7 @@ if st.button(
 
             st.success(
                 f"Memory '{memory.title}' "
-                "saved successfully."
+                "saved and indexed successfully."
             )
 
 
@@ -251,6 +252,50 @@ else:
                 st.write(
                     "**Summary:** Not available"
                 )
+
+
+            # -----------------------------------------
+            # Generate Summary
+            # -----------------------------------------
+
+            if st.button(
+                "Generate Summary",
+                key=f"generate_summary_{memory['id']}",
+            ):
+
+                try:
+
+                    with st.spinner(
+                        "Generating title and summary..."
+                    ):
+
+                        generate_memory_summary(
+                            memory_id=memory["id"],
+                            user_id=USER_ID,
+                        )
+
+
+                    st.success(
+                        "AI title and summary generated successfully."
+                    )
+
+
+                    st.rerun()
+
+
+                except ValueError as error:
+
+                    st.error(
+                        str(error)
+                    )
+
+
+                except Exception as error:
+
+                    st.error(
+                        f"Something went wrong while "
+                        f"generating the summary: {error}"
+                    )
 
 
             # -----------------------------------------
@@ -551,5 +596,6 @@ if st.button(
         except Exception as error:
 
             st.error(
-                f"Something went wrong while answering your question: {error}"
+                "Something went wrong while answering "
+                f"your question: {error}"
             )
