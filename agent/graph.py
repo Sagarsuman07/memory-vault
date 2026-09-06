@@ -51,6 +51,12 @@ def create_thread_id(
     user_id: str,
 ) -> str:
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
     return (
         f"{user_id}:"
         f"{uuid.uuid4()}"
@@ -61,9 +67,53 @@ def get_default_thread_id(
     user_id: str,
 ) -> str:
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
     return (
         f"{user_id}:default"
     )
+
+
+# ============================================================
+# Thread Security
+# ============================================================
+
+def validate_thread_id(
+    user_id: str,
+    thread_id: str,
+):
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not thread_id or not thread_id.strip():
+
+        raise ValueError(
+            "Thread ID cannot be empty."
+        )
+
+
+    expected_prefix = (
+        f"{user_id}:"
+    )
+
+
+    if not thread_id.startswith(
+        expected_prefix
+    ):
+
+        raise ValueError(
+            "Thread does not belong "
+            "to the current user."
+        )
 
 
 # ============================================================
@@ -73,6 +123,13 @@ def get_default_thread_id(
 def build_agent_graph(
     user_id: str,
 ):
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
 
     # ========================================================
     # Create tools for current user
@@ -216,11 +273,14 @@ def run_langgraph_agent(
         )
 
 
-    if not thread_id or not thread_id.strip():
+    # ========================================================
+    # Validate thread ownership
+    # ========================================================
 
-        raise ValueError(
-            "Thread ID cannot be empty."
-        )
+    validate_thread_id(
+        user_id=user_id,
+        thread_id=thread_id,
+    )
 
 
     # ========================================================
@@ -235,23 +295,25 @@ def run_langgraph_agent(
     # ========================================================
     # New message
     #
-    # Important:
-    # We only provide the NEW user message.
-    #
     # The checkpointer restores previous messages
     # belonging to this thread.
     # ========================================================
 
     input_state = {
+
         "messages": [
             {
                 "role": "user",
                 "content": question.strip(),
             }
         ],
+
         "user_id": user_id,
+
         "question": question.strip(),
+
         "final_answer": "",
+
         "tool_calls": [],
     }
 
@@ -282,6 +344,7 @@ def run_langgraph_agent(
     # ========================================================
 
     return {
+
         "answer": result.get(
             "final_answer",
             "",
@@ -310,24 +373,28 @@ def get_thread_state(
     thread_id: str,
 ):
 
-    if not user_id or not user_id.strip():
+    # ========================================================
+    # Validate thread ownership
+    # ========================================================
 
-        raise ValueError(
-            "User ID cannot be empty."
-        )
+    validate_thread_id(
+        user_id=user_id,
+        thread_id=thread_id,
+    )
 
 
-    if not thread_id or not thread_id.strip():
-
-        raise ValueError(
-            "Thread ID cannot be empty."
-        )
-
+    # ========================================================
+    # Build graph
+    # ========================================================
 
     graph = build_agent_graph(
         user_id=user_id
     )
 
+
+    # ========================================================
+    # Thread configuration
+    # ========================================================
 
     config = {
         "configurable": {
@@ -335,6 +402,10 @@ def get_thread_state(
         }
     }
 
+
+    # ========================================================
+    # Retrieve state
+    # ========================================================
 
     return graph.get_state(
         config

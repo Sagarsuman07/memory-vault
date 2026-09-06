@@ -89,4 +89,14 @@ class Settings:
     )
 
 
+    # ========================================================
+    # Safety
+    # ========================================================
+
+
+    SAFETY_ENABLED = os.getenv(
+      "SAFETY_ENABLED",
+      "true",
+    ).lower() == "true"
+
 settings = Settings()

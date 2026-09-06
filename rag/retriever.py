@@ -11,9 +11,37 @@ def retrieve(
     memory_id: str | None = None,
 ):
 
+    # ========================================================
+    # Validate question
+    # ========================================================
+
     if not question or not question.strip():
 
         return []
+
+
+    # ========================================================
+    # Validate user
+    #
+    # User ID is required for EVERY vector query.
+    # ========================================================
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID is required for memory retrieval."
+        )
+
+
+    # ========================================================
+    # Validate top_k
+    # ========================================================
+
+    if top_k <= 0:
+
+        raise ValueError(
+            "top_k must be greater than zero."
+        )
 
 
     vector_store = get_vector_store()
@@ -21,16 +49,8 @@ def retrieve(
 
     # ========================================================
     # Global Search
-    # ========================================================
     #
-    # Search all memories belonging to the current user.
-    #
-    # Example:
-    #
-    # {
-    #     "user_id": "demo_user"
-    # }
-    #
+    # Search only memories belonging to current user.
     # ========================================================
 
     if memory_id is None:
@@ -42,17 +62,19 @@ def retrieve(
 
     # ========================================================
     # Memory-Specific Search
-    # ========================================================
     #
-    # Search only the selected memory belonging to
-    # the current user.
-    #
-    # Chroma requires multiple conditions to be combined
-    # using $and.
-    #
+    # Search only the selected memory belonging
+    # to the current user.
     # ========================================================
 
     else:
+
+        if not memory_id.strip():
+
+            raise ValueError(
+                "Memory ID cannot be empty."
+            )
+
 
         filters = {
             "$and": [
