@@ -1,31 +1,41 @@
 import os
+
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
 
 class Settings:
-    APP_ENV = os.getenv("APP_ENV", "development")
+
+    APP_ENV = os.getenv(
+        "APP_ENV",
+        "development",
+    )
 
     DEMO_USER_ID = os.getenv(
         "DEMO_USER_ID",
-        "demo_user"
+        "demo_user",
     )
 
     DATABASE_PATH = os.getenv(
         "DATABASE_PATH",
-        "memory_vault.db"
+        "memory_vault.db",
     )
 
     UPLOAD_DIR = os.getenv(
         "UPLOAD_DIR",
-        "uploads"
+        "uploads",
     )
 
-    # Ollama Cloud
+
+    # ========================================================
+    # Ollama
+    # ========================================================
+
     OLLAMA_HOST = os.getenv(
         "OLLAMA_HOST",
-        "https://ollama.com"
+        "https://ollama.com",
     )
 
     OLLAMA_API_KEY = os.getenv(
@@ -36,19 +46,32 @@ class Settings:
         "OLLAMA_MODEL"
     )
 
-    # Groq Speech-to-Text
+
+    # ========================================================
+    # Groq
+    # ========================================================
+
     GROQ_API_KEY = os.getenv(
         "GROQ_API_KEY"
     )
 
     GROQ_WHISPER_MODEL = os.getenv(
         "GROQ_WHISPER_MODEL",
-        "whisper-large-v3-turbo"
+        "whisper-large-v3-turbo",
     )
 
     GROQ_LLM_MODEL = os.getenv(
         "GROQ_LLM_MODEL",
-        "openai/gpt-oss-120b"
+        "openai/gpt-oss-120b",
+    )
+
+
+    # ========================================================
+    # Tavily
+    # ========================================================
+
+    TAVILY_API_KEY = os.getenv(
+        "TAVILY_API_KEY"
     )
 
 
