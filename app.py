@@ -13,6 +13,7 @@ from memory.memory_service import (
     generate_memory_summary,
 )
 
+from agent.tools import run_tool_calling
 
 # ============================================================
 # Page Configuration
@@ -598,4 +599,113 @@ if st.button(
             st.error(
                 "Something went wrong while answering "
                 f"your question: {error}"
+            )
+
+
+
+
+
+# ============================================================
+# Tool Calling Assistant
+# ============================================================
+
+st.divider()
+
+st.header(
+    "Ask Memory Vault Agent"
+)
+
+st.write(
+    "The LLM can decide when to use memory search, "
+    "memory lookup, calculation, or web search."
+)
+
+
+agent_question = st.text_input(
+    "Ask the tool-calling assistant",
+    placeholder=(
+        "e.g. What is the total price of my saved products?"
+    ),
+    key="agent_question",
+)
+
+
+if st.button(
+    "Ask Agent",
+    type="primary",
+    key="ask_agent",
+):
+
+    if not agent_question.strip():
+
+        st.warning(
+            "Please enter a question."
+        )
+
+    else:
+
+        try:
+
+            with st.spinner(
+                "Thinking and using tools..."
+            ):
+
+                result = run_tool_calling(
+                    question=agent_question,
+                    user_id=USER_ID,
+                )
+
+
+            # -----------------------------------------
+            # Final Answer
+            # -----------------------------------------
+
+            st.subheader(
+                "Answer"
+            )
+
+            st.write(
+                result["answer"]
+            )
+
+
+            # -----------------------------------------
+            # Tool Calls
+            # -----------------------------------------
+
+            if result["tool_calls"]:
+
+                st.subheader(
+                    "Tool Calls"
+                )
+
+
+                for index, call in enumerate(
+                    result["tool_calls"],
+                    start=1,
+                ):
+
+                    st.write(
+                        f"**Tool {index}:** "
+                        f"`{call['tool']}`"
+                    )
+
+
+                    st.json(
+                        call["arguments"]
+                    )
+
+
+            else:
+
+                st.info(
+                    "No tool was required for this question."
+                )
+
+
+        except Exception as error:
+
+            st.error(
+                "Something went wrong while running "
+                f"the tool-calling assistant: {error}"
             )
