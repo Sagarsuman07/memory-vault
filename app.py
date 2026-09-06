@@ -14,6 +14,7 @@ from memory.memory_service import (
 )
 
 from agent.tools import run_tool_calling
+from agent.graph import run_langgraph_agent
 
 # ============================================================
 # Page Configuration
@@ -708,4 +709,113 @@ if st.button(
             st.error(
                 "Something went wrong while running "
                 f"the tool-calling assistant: {error}"
+            )
+
+
+
+
+
+# ============================================================
+# LangGraph Agent
+# ============================================================
+
+st.divider()
+
+st.header(
+    "Ask Memory Vault LangGraph Agent"
+)
+
+st.write(
+    "The LangGraph agent can decide which tools "
+    "to use and can execute multiple tools when needed."
+)
+
+
+langgraph_question = st.text_input(
+    "Ask the LangGraph agent",
+    placeholder=(
+        "e.g. What is the total price of my saved products?"
+    ),
+    key="langgraph_question",
+)
+
+
+if st.button(
+    "Ask LangGraph Agent",
+    type="primary",
+    key="ask_langgraph_agent",
+):
+
+    if not langgraph_question.strip():
+
+        st.warning(
+            "Please enter a question."
+        )
+
+    else:
+
+        try:
+
+            with st.spinner(
+                "LangGraph agent is working..."
+            ):
+
+                result = run_langgraph_agent(
+                    question=langgraph_question,
+                    user_id=USER_ID,
+                )
+
+
+            # ------------------------------------------------
+            # Final Answer
+            # ------------------------------------------------
+
+            st.subheader(
+                "Answer"
+            )
+
+            st.write(
+                result["answer"]
+            )
+
+
+            # ------------------------------------------------
+            # Tool Calls
+            # ------------------------------------------------
+
+            if result["tool_calls"]:
+
+                st.subheader(
+                    "Tool Calls"
+                )
+
+
+                for index, call in enumerate(
+                    result["tool_calls"],
+                    start=1,
+                ):
+
+                    st.write(
+                        f"**Tool {index}:** "
+                        f"`{call['tool']}`"
+                    )
+
+
+                    st.json(
+                        call["arguments"]
+                    )
+
+
+            else:
+
+                st.info(
+                    "No tool was required."
+                )
+
+
+        except Exception as error:
+
+            st.error(
+                "Something went wrong while running "
+                f"the LangGraph agent: {error}"
             )
