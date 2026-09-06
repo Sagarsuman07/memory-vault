@@ -2,17 +2,7 @@ import streamlit as st
 
 from config.settings import settings
 
-from database.database import (
-    initialize_database
-)
-
-from memory.memory_service import (
-    create_new_memory,
-    list_memories,
-    update_memory,
-    delete_memory,
-)
-
+from database.database import initialize_database
 
 from memory.memory_service import (
     create_new_memory,
@@ -264,46 +254,50 @@ else:
 
 
             # -----------------------------------------
-            # Memory Details
+            # Memory ID
+            # -----------------------------------------
+
+            st.write(
+                f"**Memory ID:** "
+                f"`{memory['id']}`"
+            )
+
+
+            # -----------------------------------------
+            # User ID
+            # -----------------------------------------
+
+            st.write(
+                f"**User ID:** "
+                f"`{memory['user_id']}`"
+            )
+
+
+            # -----------------------------------------
+            # File Path
+            # -----------------------------------------
+
+            st.write(
+                f"**File Path:** "
+                f"`{memory['file_path']}`"
+            )
+
+
+            # -----------------------------------------
+            # Extracted Content
             # -----------------------------------------
 
             with st.expander(
-                "Memory Details"
+                "View Extracted Content"
             ):
-
-                st.write(
-                    f"**Memory ID:** "
-                    f"`{memory['id']}`"
-                )
-
-
-                st.write(
-                    f"**User ID:** "
-                    f"`{memory['user_id']}`"
-                )
-
-
-                st.write(
-                    f"**File Path:** "
-                    f"`{memory['file_path']}`"
-                )
-
-
-                st.write(
-                    "**Extracted Content:**"
-                )
-
 
                 st.text(
                     memory["extracted_text"]
                 )
 
 
-            st.divider()
-
-
             # -----------------------------------------
-            # Update Memory
+            # Edit Memory
             # -----------------------------------------
 
             with st.expander(
@@ -314,16 +308,15 @@ else:
                     key=f"edit_form_{memory['id']}"
                 ):
 
-                    updated_title = st.text_input(
+                    edited_title = st.text_input(
                         "Title",
                         value=memory["title"],
                     )
 
 
-                    updated_summary = st.text_area(
+                    edited_summary = st.text_area(
                         "Summary",
                         value=memory["summary"] or "",
-                        height=120,
                     )
 
 
@@ -339,8 +332,8 @@ else:
                             update_memory(
                                 memory_id=memory["id"],
                                 user_id=USER_ID,
-                                title=updated_title,
-                                summary=updated_summary,
+                                title=edited_title,
+                                summary=edited_summary,
                             )
 
 
@@ -372,31 +365,30 @@ else:
 
             if st.button(
                 "Delete Memory",
-                key=f"delete_{memory['id']}",
+                key=f"delete_{memory['id']}"
             ):
 
                 try:
 
-                    deleted = delete_memory(
+                    delete_memory(
                         memory_id=memory["id"],
                         user_id=USER_ID,
                     )
 
 
-                    if deleted:
-
-                        st.success(
-                            "Memory deleted successfully."
-                        )
-
-                        st.rerun()
+                    st.success(
+                        "Memory deleted successfully."
+                    )
 
 
-                    else:
+                    st.rerun()
 
-                        st.error(
-                            "Memory could not be found."
-                        )
+
+                except ValueError as error:
+
+                    st.error(
+                        str(error)
+                    )
 
 
                 except Exception as error:
@@ -406,9 +398,8 @@ else:
                     )
 
 
-
 # ============================================================
-# Question and Answer
+# Ask Your Memories
 # ============================================================
 
 st.divider()
@@ -418,21 +409,89 @@ st.header(
 )
 
 
-question = st.text_input(
-    "Ask a question about your memories",
-    placeholder="e.g. What is the price of the iPhone?"
+# ============================================================
+# Retrieval Scope
+# ============================================================
+
+search_scope = st.radio(
+    "Search Scope",
+    options=[
+        "All Memories",
+        "Specific Memory",
+    ],
+    horizontal=True,
 )
 
 
+selected_memory_id = None
+
+
+# ============================================================
+# Specific Memory Selection
+# ============================================================
+
+if search_scope == "Specific Memory":
+
+    if not memories:
+
+        st.info(
+            "You don't have any memories to search."
+        )
+
+    else:
+
+        memory_options = {
+            memory["title"]: memory["id"]
+            for memory in memories
+        }
+
+
+        selected_memory_title = st.selectbox(
+            "Select a memory",
+            options=list(
+                memory_options.keys()
+            ),
+        )
+
+
+        selected_memory_id = memory_options[
+            selected_memory_title
+        ]
+
+
+# ============================================================
+# Question
+# ============================================================
+
+question = st.text_input(
+    "Ask a question about your memories",
+    placeholder="e.g. What is the price of the iPhone?",
+)
+
+
+# ============================================================
+# Ask Button
+# ============================================================
+
 if st.button(
     "Ask",
-    type="primary"
+    type="primary",
+    key="ask_memories",
 ):
 
     if not question.strip():
 
         st.warning(
             "Please enter a question."
+        )
+
+    elif (
+        search_scope == "Specific Memory"
+        and selected_memory_id is None
+    ):
+
+        st.warning(
+            "Please select a memory."
         )
 
     else:
@@ -442,17 +501,27 @@ if st.button(
             result = answer_question(
                 question=question,
                 user_id=USER_ID,
+                memory_id=selected_memory_id,
             )
 
+
+            # -----------------------------------------
+            # Answer
+            # -----------------------------------------
 
             st.subheader(
                 "Answer"
             )
 
+
             st.write(
                 result["answer"]
             )
 
+
+            # -----------------------------------------
+            # Sources
+            # -----------------------------------------
 
             if result["grounded"]:
 

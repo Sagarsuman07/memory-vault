@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
+from langchain_groq import ChatGroq
+
 from config.settings import settings
 
 from database.models import Memory
@@ -19,56 +21,17 @@ from ingestion.pipeline import (
     get_memory_type,
 )
 
-
-# ============================================================
-# Phase 3 to Phase 4 transition
-# ============================================================
-
-
+from prompts.qa import QA_PROMPT
 
 from rag.chunker import split_text
+
 from rag.vector_store import index_memory
 
-def index_existing_memory(
-    memory_id: str,
-    user_id: str,
-):
+from rag.retriever import retrieve
 
-    memory = get_memory(
-        memory_id,
-        user_id
-    )
-
-    if memory is None:
-
-        raise ValueError(
-            "Memory not found."
-        )
-
-    extracted_text = memory["extracted_text"]
-
-    if not extracted_text:
-        raise ValueError(
-            "Memory has no extracted content."
-        )
-
-    chunks = split_text(
-        extracted_text
-    )
-
-    if not chunks:
-        raise ValueError(
-            "No chunks could be created."
-        )
-
-    indexed_count = index_memory(
-        memory_id=memory["id"],
-        user_id=memory["user_id"],
-        memory_type=memory["memory_type"],
-        chunks=chunks,
-    )
-
-    return indexed_count
+from rag.grounding import (
+    get_grounded_results,
+)
 
 
 # ============================================================
@@ -115,37 +78,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 
 # ============================================================
-# Validation
-# ============================================================
-
-def validate_file(
-    uploaded_file
-):
-
-    extension = Path(
-        uploaded_file.name
-    ).suffix.lower()
-
-
-    if extension not in ALLOWED_EXTENSIONS:
-
-        raise ValueError(
-            "Unsupported file type. "
-            "Supported files are PDF, DOCX, TXT, "
-            "JPG, JPEG, PNG, WEBP, GIF, MP3, WAV, "
-            "M4A, MPEG, MPGA, WEBM, OGG and FLAC."
-        )
-
-
-    if uploaded_file.size > MAX_FILE_SIZE:
-
-        raise ValueError(
-            "File size must be less than 10 MB."
-        )
-
-
-# ============================================================
-# CREATE MEMORY
+# Create Memory
 # ============================================================
 
 def create_new_memory(
@@ -154,61 +87,73 @@ def create_new_memory(
     user_id: str,
 ):
 
-    # -----------------------------------------
-    # 1. Validate file
-    # -----------------------------------------
+    if uploaded_file is None:
 
-    validate_file(
-        uploaded_file
-    )
+        raise ValueError(
+            "No file was provided."
+        )
 
 
-    # -----------------------------------------
-    # 2. Validate title
-    # -----------------------------------------
-
-    if not title.strip():
+    if not title or not title.strip():
 
         raise ValueError(
             "Memory title cannot be empty."
         )
 
 
-    # -----------------------------------------
-    # 3. Generate memory ID
-    # -----------------------------------------
+    file_name = uploaded_file.name
+
+    extension = Path(
+        file_name
+    ).suffix.lower()
+
+
+    # ========================================================
+    # Validate extension
+    # ========================================================
+
+    if extension not in ALLOWED_EXTENSIONS:
+
+        raise ValueError(
+            f"Unsupported file type: {extension}"
+        )
+
+
+    # ========================================================
+    # Validate file size
+    # ========================================================
+
+    file_bytes = uploaded_file.getvalue()
+
+
+    if len(file_bytes) > MAX_FILE_SIZE:
+
+        raise ValueError(
+            "File size cannot exceed 10 MB."
+        )
+
+
+    # ========================================================
+    # Generate memory ID
+    # ========================================================
 
     memory_id = str(
         uuid.uuid4()
     )
 
 
-    # -----------------------------------------
-    # 4. Original file information
-    # -----------------------------------------
-
-    original_file_name = (
-        uploaded_file.name
-    )
-
-
-    extension = Path(
-        original_file_name
-    ).suffix.lower()
-
-
-    # -----------------------------------------
-    # 5. Determine memory type
-    # -----------------------------------------
+    # ========================================================
+    # Determine memory type
+    # ========================================================
 
     memory_type = get_memory_type(
-        original_file_name
+        file_name
     )
 
 
-    # -----------------------------------------
-    # 6. Create storage path
-    # -----------------------------------------
+    # ========================================================
+    # Save original file
+    # ========================================================
 
     file_path = (
         UPLOAD_DIR
@@ -216,70 +161,44 @@ def create_new_memory(
     )
 
 
+    file_path.write_bytes(
+        file_bytes
+    )
+
+
     try:
 
-        # -------------------------------------
-        # 7. Save original file
-        # -------------------------------------
-
-        with open(
-            file_path,
-            "wb"
-        ) as file:
-
-            file.write(
-                uploaded_file.getbuffer()
-            )
-
-
-        # -------------------------------------
-        # 8. Extract content
-        # -------------------------------------
+        # ====================================================
+        # Extract content
+        # ====================================================
 
         extracted_text = extract_content(
             str(file_path)
         )
 
 
-        # -------------------------------------
-        # 9. Validate extracted content
-        # -------------------------------------
-
-        if not extracted_text:
+        if not extracted_text or not extracted_text.strip():
 
             raise ValueError(
-                "No content could be extracted "
-                "from the uploaded file."
+                "No content could be extracted from the file."
             )
 
 
-        if not extracted_text.strip():
-
-            raise ValueError(
-                "No readable content was extracted "
-                "from the uploaded file."
-            )
-
-
-        # -------------------------------------
-        # 10. Generate timestamps
-        # -------------------------------------
+        # ====================================================
+        # Create Memory object
+        # ====================================================
 
         now = datetime.now(
             timezone.utc
         ).isoformat()
 
 
-        # -------------------------------------
-        # 11. Create Memory object
-        # -------------------------------------
-
         memory = Memory(
             id=memory_id,
             user_id=user_id,
             memory_type=memory_type,
             title=title.strip(),
-            file_name=original_file_name,
+            file_name=file_name,
             file_path=str(file_path),
             summary=None,
             extracted_text=extracted_text,
@@ -288,12 +207,36 @@ def create_new_memory(
         )
 
 
-        # -------------------------------------
-        # 12. Save memory
-        # -------------------------------------
+        # ====================================================
+        # Save memory in SQLite
+        # ====================================================
 
         create_memory(
             memory
+        )
+
+
+        # ====================================================
+        # Automatically index memory
+        # ====================================================
+
+        chunks = split_text(
+            extracted_text
+        )
+
+
+        if not chunks:
+
+            raise ValueError(
+                "No chunks could be created for indexing."
+            )
+
+
+        index_memory(
+            memory_id=memory.id,
+            user_id=memory.user_id,
+            memory_type=memory.memory_type,
+            chunks=chunks,
         )
 
 
@@ -302,29 +245,46 @@ def create_new_memory(
 
     except Exception:
 
-        # -------------------------------------
-        # Cleanup if anything fails
-        # -------------------------------------
+        # ====================================================
+        # Cleanup original file
+        # ====================================================
 
         if file_path.exists():
 
             file_path.unlink()
 
+
+        # ====================================================
+        # Cleanup database record
+        # ====================================================
+
+        try:
+
+            delete_memory_record(
+                memory_id,
+                user_id,
+            )
+
+        except Exception:
+
+            pass
+
+
         raise
 
 
 # ============================================================
-# GET MEMORY
+# Get Memory
 # ============================================================
 
 def get_memory_by_id(
     memory_id: str,
-    user_id: str
+    user_id: str,
 ):
 
     memory = get_memory(
         memory_id,
-        user_id
+        user_id,
     )
 
 
@@ -339,7 +299,7 @@ def get_memory_by_id(
 
 
 # ============================================================
-# LIST MEMORIES
+# List Memories
 # ============================================================
 
 def list_memories(
@@ -352,17 +312,17 @@ def list_memories(
 
 
 # ============================================================
-# UPDATE MEMORY
+# Update Memory
 # ============================================================
 
 def update_memory(
     memory_id: str,
     user_id: str,
     title: str,
-    summary: str
+    summary: str,
 ):
 
-    if not title.strip():
+    if not title or not title.strip():
 
         raise ValueError(
             "Memory title cannot be empty."
@@ -386,37 +346,31 @@ def update_memory(
 
     return get_memory(
         memory_id,
-        user_id
+        user_id,
     )
 
 
 # ============================================================
-# DELETE MEMORY
+# Delete Memory
 # ============================================================
 
 def delete_memory(
     memory_id: str,
-    user_id: str
+    user_id: str,
 ):
-
-    # -----------------------------------------
-    # 1. Get memory
-    # -----------------------------------------
 
     memory = get_memory(
         memory_id,
-        user_id
+        user_id,
     )
 
 
     if memory is None:
 
-        return False
+        raise ValueError(
+            "Memory not found."
+        )
 
-
-    # -----------------------------------------
-    # 2. Delete original file
-    # -----------------------------------------
 
     file_path = Path(
         memory["file_path"]
@@ -428,39 +382,79 @@ def delete_memory(
         file_path.unlink()
 
 
-    # -----------------------------------------
-    # 3. Delete database record
-    # -----------------------------------------
-
     deleted = delete_memory_record(
         memory_id,
-        user_id
+        user_id,
     )
 
 
-    return deleted
+    if not deleted:
+
+        raise ValueError(
+            "Memory could not be deleted."
+        )
 
 
+# ============================================================
+# Manual Re-index Existing Memory
+# ============================================================
+
+def index_existing_memory(
+    memory_id: str,
+    user_id: str,
+):
+
+    memory = get_memory(
+        memory_id,
+        user_id,
+    )
 
 
-# -----------------------------------------
-# Answer Question through LLM
-# -----------------------------------------
+    if memory is None:
 
-from langchain_groq import ChatGroq
-
-from prompts.qa import QA_PROMPT
-
-from rag.retriever import retrieve
-
-from rag.grounding import (
-    get_grounded_results,
-)
-
-from config.settings import settings
+        raise ValueError(
+            "Memory not found."
+        )
 
 
-# Get Model
+    extracted_text = memory[
+        "extracted_text"
+    ]
+
+
+    if not extracted_text:
+
+        raise ValueError(
+            "Memory has no extracted content."
+        )
+
+
+    chunks = split_text(
+        extracted_text
+    )
+
+
+    if not chunks:
+
+        raise ValueError(
+            "No chunks could be created."
+        )
+
+
+    indexed_count = index_memory(
+        memory_id=memory["id"],
+        user_id=memory["user_id"],
+        memory_type=memory["memory_type"],
+        chunks=chunks,
+    )
+
+
+    return indexed_count
+
+
+# ============================================================
+# QA Model
+# ============================================================
 
 def get_qa_model():
 
@@ -470,6 +464,7 @@ def get_qa_model():
             "GROQ_API_KEY is not configured."
         )
 
+
     return ChatGroq(
         model=settings.GROQ_LLM_MODEL,
         temperature=0,
@@ -477,7 +472,9 @@ def get_qa_model():
     )
 
 
-# Build context
+# ============================================================
+# Build QA Context
+# ============================================================
 
 def build_context(
     grounded_results
@@ -485,7 +482,11 @@ def build_context(
 
     context_parts = []
 
-    for rank, (document, distance) in enumerate(
+
+    for rank, (
+        document,
+        distance
+    ) in enumerate(
         grounded_results,
         start=1
     ):
@@ -502,15 +503,15 @@ Content:
 """
         )
 
+
     return "\n\n".join(
         context_parts
     )
 
 
-
-# -----------------------------------------
-# Implement question answering
-# -----------------------------------------
+# ============================================================
+# Answer Question
+# ============================================================
 
 def answer_question(
     question: str,
@@ -525,9 +526,9 @@ def answer_question(
         )
 
 
-    # -----------------------------------------
+    # ========================================================
     # 1. Retrieve
-    # -----------------------------------------
+    # ========================================================
 
     results = retrieve(
         question=question,
@@ -537,9 +538,9 @@ def answer_question(
     )
 
 
-    # -----------------------------------------
-    # 2. Grounding check
-    # -----------------------------------------
+    # ========================================================
+    # 2. Grounding Check
+    # ========================================================
 
     grounded_results = get_grounded_results(
         results
@@ -558,25 +559,25 @@ def answer_question(
         }
 
 
-    # -----------------------------------------
-    # 3. Build context
-    # -----------------------------------------
+    # ========================================================
+    # 3. Build Context
+    # ========================================================
 
     context = build_context(
         grounded_results
     )
 
 
-    # -----------------------------------------
+    # ========================================================
     # 4. Create LLM
-    # -----------------------------------------
+    # ========================================================
 
     model = get_qa_model()
 
 
-    # -----------------------------------------
-    # 5. Build prompt
-    # -----------------------------------------
+    # ========================================================
+    # 5. Build Prompt
+    # ========================================================
 
     messages = QA_PROMPT.format_messages(
         context=context,
@@ -584,20 +585,21 @@ def answer_question(
     )
 
 
-    # -----------------------------------------
-    # 6. Generate answer
-    # -----------------------------------------
+    # ========================================================
+    # 6. Generate Answer
+    # ========================================================
 
     response = model.invoke(
         messages
     )
 
 
-    # -----------------------------------------
-    # 7. Return answer + sources
-    # -----------------------------------------
+    # ========================================================
+    # 7. Build Sources
+    # ========================================================
 
     sources = []
+
 
     for document, distance in grounded_results:
 
@@ -617,6 +619,10 @@ def answer_question(
             }
         )
 
+
+    # ========================================================
+    # 8. Return Result
+    # ========================================================
 
     return {
         "answer": response.content,
