@@ -1,4 +1,4 @@
-DEFAULT_DISTANCE_THRESHOLD = 0.7
+DEFAULT_DISTANCE_THRESHOLD = 1.2
 
 
 def get_grounded_results(
