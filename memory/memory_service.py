@@ -23,16 +23,12 @@ from ingestion.pipeline import (
 
 from prompts.qa import QA_PROMPT
 from prompts.summary import SUMMARY_PROMPT
+from prompts.safety import SAFETY_PROMPT
 
 from rag.chunker import split_text
-
 from rag.vector_store import index_memory
-
 from rag.retriever import retrieve
-
-from rag.grounding import (
-    get_grounded_results,
-)
+from rag.grounding import get_grounded_results
 
 
 # ============================================================
@@ -91,6 +87,13 @@ def create_new_memory(
 
         raise ValueError(
             "No file was provided."
+        )
+
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
         )
 
 
@@ -177,7 +180,10 @@ def create_new_memory(
         )
 
 
-        if not extracted_text or not extracted_text.strip():
+        if (
+            not extracted_text
+            or not extracted_text.strip()
+        ):
 
             raise ValueError(
                 "No content could be extracted "
@@ -186,7 +192,7 @@ def create_new_memory(
 
 
         # ====================================================
-        # Create memory object
+        # Create Memory object
         # ====================================================
 
         now = datetime.now(
@@ -209,7 +215,7 @@ def create_new_memory(
 
 
         # ====================================================
-        # Save to database
+        # Save memory to SQLite
         # ====================================================
 
         create_memory(
@@ -284,6 +290,20 @@ def get_memory_by_id(
     user_id: str,
 ):
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not memory_id or not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+
     memory = get_memory(
         memory_id,
         user_id,
@@ -308,6 +328,13 @@ def list_memories(
     user_id: str
 ):
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
     return get_all_memories(
         user_id
     )
@@ -323,6 +350,20 @@ def update_memory(
     title: str,
     summary: str,
 ):
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not memory_id or not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
 
     if not title or not title.strip():
 
@@ -361,6 +402,24 @@ def delete_memory(
     user_id: str,
 ):
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not memory_id or not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+
+    # ========================================================
+    # Get memory using user_id + memory_id
+    # ========================================================
+
     memory = get_memory(
         memory_id,
         user_id,
@@ -374,6 +433,10 @@ def delete_memory(
         )
 
 
+    # ========================================================
+    # Delete original file
+    # ========================================================
+
     file_path = Path(
         memory["file_path"]
     )
@@ -383,6 +446,10 @@ def delete_memory(
 
         file_path.unlink()
 
+
+    # ========================================================
+    # Delete database record
+    # ========================================================
 
     deleted = delete_memory_record(
         memory_id,
@@ -406,6 +473,24 @@ def index_existing_memory(
     user_id: str,
 ):
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not memory_id or not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+
+    # ========================================================
+    # Get memory using user_id + memory_id
+    # ========================================================
+
     memory = get_memory(
         memory_id,
         user_id,
@@ -424,12 +509,19 @@ def index_existing_memory(
     ]
 
 
-    if not extracted_text:
+    if (
+        not extracted_text
+        or not extracted_text.strip()
+    ):
 
         raise ValueError(
             "Memory has no extracted content."
         )
 
+
+    # ========================================================
+    # Create chunks
+    # ========================================================
 
     chunks = split_text(
         extracted_text
@@ -442,6 +534,10 @@ def index_existing_memory(
             "No chunks could be created."
         )
 
+
+    # ========================================================
+    # Index chunks
+    # ========================================================
 
     indexed_count = index_memory(
         memory_id=memory["id"],
@@ -495,6 +591,103 @@ def get_summary_model():
 
 
 # ============================================================
+# Safety Model
+# ============================================================
+
+def get_safety_model():
+
+    if not settings.GROQ_API_KEY:
+
+        raise ValueError(
+            "GROQ_API_KEY is not configured."
+        )
+
+
+    return ChatGroq(
+        model=settings.GROQ_LLM_MODEL,
+        temperature=0,
+        api_key=settings.GROQ_API_KEY,
+    )
+
+
+# ============================================================
+# Check Content Safety
+# ============================================================
+
+def check_content_safety(
+    content: str,
+) -> bool:
+
+    # ========================================================
+    # Empty content is not safe
+    # ========================================================
+
+    if not content or not content.strip():
+
+        return False
+
+
+    # ========================================================
+    # Safety switch
+    # ========================================================
+
+    if not settings.SAFETY_ENABLED:
+
+        return True
+
+
+    # ========================================================
+    # Create safety model
+    # ========================================================
+
+    model = get_safety_model()
+
+
+    # ========================================================
+    # Build safety prompt
+    # ========================================================
+
+    prompt = SAFETY_PROMPT.invoke(
+        {
+            "content": content,
+        }
+    )
+
+
+    # ========================================================
+    # Run safety classifier
+    # ========================================================
+
+    response = model.invoke(
+        prompt
+    )
+
+
+    result = response.content
+
+
+    if not isinstance(
+        result,
+        str,
+    ):
+
+        return False
+
+
+    result = result.strip().upper()
+
+
+    # ========================================================
+    # Fail closed
+    #
+    # Only exact ALLOW is accepted.
+    # BLOCK / MAYBE / EMPTY / anything else = BLOCK
+    # ========================================================
+
+    return result == "ALLOW"
+
+
+# ============================================================
 # Generate Memory Summary
 # ============================================================
 
@@ -503,8 +696,22 @@ def generate_memory_summary(
     user_id: str,
 ):
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if not memory_id or not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+
     # ========================================================
-    # 1. Get memory
+    # Get memory using BOTH memory_id and user_id
     # ========================================================
 
     memory = get_memory(
@@ -521,7 +728,7 @@ def generate_memory_summary(
 
 
     # ========================================================
-    # 2. Get extracted content
+    # Get extracted content
     # ========================================================
 
     extracted_text = memory[
@@ -529,94 +736,125 @@ def generate_memory_summary(
     ]
 
 
-    if not extracted_text or not extracted_text.strip():
+    if (
+        not extracted_text
+        or not extracted_text.strip()
+    ):
 
         raise ValueError(
-            "Memory has no extracted content "
-            "to summarize."
+            "No extracted content is available "
+            "for summarization."
         )
 
 
     # ========================================================
-    # 3. Create summary model
+    # Phase 11 — Safety Check
+    # ========================================================
+
+    is_safe = check_content_safety(
+        extracted_text
+    )
+
+
+    if not is_safe:
+
+        raise ValueError(
+            "This memory cannot be summarized "
+            "because its content did not pass "
+            "the safety check."
+        )
+
+
+    # ========================================================
+    # Create summary model
     # ========================================================
 
     model = get_summary_model()
 
 
     # ========================================================
-    # 4. Build prompt
+    # Build summary prompt
     # ========================================================
 
-    messages = SUMMARY_PROMPT.format_messages(
-        extracted_text=extracted_text,
+    prompt = SUMMARY_PROMPT.invoke(
+        {
+            "extracted_text": extracted_text,
+        }
     )
 
 
     # ========================================================
-    # 5. Generate title + summary
+    # Generate summary
     # ========================================================
 
     response = model.invoke(
-        messages
+        prompt
     )
 
 
-    generated_text = response.content.strip()
+    content = response.content
 
 
-    if not generated_text:
+    if not isinstance(
+        content,
+        str,
+    ):
 
         raise ValueError(
-            "The LLM returned an empty summary."
+            "Summary model returned invalid content."
         )
 
 
+    content = content.strip()
+
+
     # ========================================================
-    # 6. Parse title and summary
+    # Parse title and summary
     # ========================================================
 
     title_marker = "TITLE:"
     summary_marker = "SUMMARY:"
 
 
-    if (
-        title_marker not in generated_text
-        or summary_marker not in generated_text
-    ):
+    if title_marker not in content:
 
         raise ValueError(
-            "The LLM returned an unexpected "
-            "summary format."
+            "Summary response does not contain "
+            "a TITLE section."
         )
 
 
-    title_start = (
-        generated_text.index(
-            title_marker
+    if summary_marker not in content:
+
+        raise ValueError(
+            "Summary response does not contain "
+            "a SUMMARY section."
         )
-        + len(title_marker)
-    )
 
 
-    summary_start = generated_text.index(
-        summary_marker
-    )
+    title_part = content.split(
+        title_marker,
+        1
+    )[1]
+
+
+    title_part = title_part.split(
+        summary_marker,
+        1
+    )[0]
 
 
     generated_title = (
-        generated_text[
-            title_start:summary_start
-        ]
+        title_part
         .strip()
     )
 
 
     generated_summary = (
-        generated_text[
-            summary_start
-            + len(summary_marker):
-        ]
+        content.split(
+            summary_marker,
+            1
+        )[1]
         .strip()
     )
 
@@ -624,19 +862,23 @@ def generate_memory_summary(
     if not generated_title:
 
         raise ValueError(
-            "The generated title is empty."
+            "Generated title is empty."
         )
 
 
     if not generated_summary:
 
         raise ValueError(
-            "The generated summary is empty."
+            "Generated summary is empty."
         )
 
 
     # ========================================================
-    # 7. Save title + summary
+    # Save title and summary
+    #
+    # IMPORTANT:
+    # extracted_text remains unchanged.
+    # Chroma vectors remain unchanged.
     # ========================================================
 
     updated = update_memory_record(
@@ -655,7 +897,7 @@ def generate_memory_summary(
 
 
     # ========================================================
-    # 8. Return updated memory
+    # Return updated memory
     # ========================================================
 
     return get_memory(
@@ -665,7 +907,7 @@ def generate_memory_summary(
 
 
 # ============================================================
-# Build QA Context
+# Build RAG Context
 # ============================================================
 
 def build_context(
@@ -718,8 +960,32 @@ def answer_question(
         )
 
 
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+
+    if memory_id is not None:
+
+        if not memory_id.strip():
+
+            raise ValueError(
+                "Memory ID cannot be empty."
+            )
+
+
     # ========================================================
-    # 1. Retrieve
+    # Retrieve relevant memories
+    #
+    # retrieve() applies:
+    #
+    # Global:
+    # user_id
+    #
+    # Specific memory:
+    # user_id + memory_id
     # ========================================================
 
     results = retrieve(
@@ -731,13 +997,17 @@ def answer_question(
 
 
     # ========================================================
-    # 2. Grounding Check
+    # Apply grounding threshold
     # ========================================================
 
     grounded_results = get_grounded_results(
         results
     )
 
+
+    # ========================================================
+    # No grounded information
+    # ========================================================
 
     if not grounded_results:
 
@@ -752,7 +1022,7 @@ def answer_question(
 
 
     # ========================================================
-    # 3. Build Context
+    # Build context
     # ========================================================
 
     context = build_context(
@@ -761,14 +1031,14 @@ def answer_question(
 
 
     # ========================================================
-    # 4. Create LLM
+    # Create QA model
     # ========================================================
 
     model = get_qa_model()
 
 
     # ========================================================
-    # 5. Build Prompt
+    # Build QA prompt
     # ========================================================
 
     messages = QA_PROMPT.format_messages(
@@ -778,7 +1048,7 @@ def answer_question(
 
 
     # ========================================================
-    # 6. Generate Answer
+    # Generate answer
     # ========================================================
 
     response = model.invoke(
@@ -787,7 +1057,7 @@ def answer_question(
 
 
     # ========================================================
-    # 7. Build Sources
+    # Build sources
     # ========================================================
 
     sources = []
@@ -813,7 +1083,7 @@ def answer_question(
 
 
     # ========================================================
-    # 8. Return Result
+    # Return result
     # ========================================================
 
     return {
