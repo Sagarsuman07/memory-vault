@@ -1,6 +1,8 @@
 
 
-langgraph-checkpoint-sqlite
+langsmith
+
+#langgraph-checkpoint-sqlite
 
 #langgraph
 
@@ -16,7 +18,7 @@ langgraph-checkpoint-sqlite
 #chromadb
 #sqlalchemy
 #pydantic
-#langsmith
+
 
 #streamlit
 #python-dotenv
