@@ -7,7 +7,6 @@ load_dotenv()
 
 
 class Settings:
-
     # ========================================================
     # Application
     # ========================================================
@@ -32,7 +31,6 @@ class Settings:
         "uploads",
     )
 
-
     # ========================================================
     # LangGraph Checkpoint Database
     # ========================================================
@@ -42,6 +40,25 @@ class Settings:
         "memory_vault_checkpoints.sqlite",
     )
 
+    # ========================================================
+    # Safety
+    # ========================================================
+
+    SAFETY_ENABLED = os.getenv(
+        "SAFETY_ENABLED",
+        "true",
+    ).lower() == "true"
+
+    # ========================================================
+    # Phase 13 - Voice Recording
+    # ========================================================
+
+    MIN_RECORDING_SECONDS = float(
+        os.getenv(
+            "MIN_RECORDING_SECONDS",
+            "1.0",
+        )
+    )
 
     # ========================================================
     # Ollama
@@ -59,7 +76,6 @@ class Settings:
     OLLAMA_MODEL = os.getenv(
         "OLLAMA_MODEL"
     )
-
 
     # ========================================================
     # Groq
@@ -79,7 +95,6 @@ class Settings:
         "openai/gpt-oss-120b",
     )
 
-
     # ========================================================
     # Tavily
     # ========================================================
@@ -88,15 +103,23 @@ class Settings:
         "TAVILY_API_KEY"
     )
 
-
     # ========================================================
-    # Safety
+    # LangSmith
     # ========================================================
 
-
-    SAFETY_ENABLED = os.getenv(
-      "SAFETY_ENABLED",
-      "true",
+    LANGSMITH_TRACING = os.getenv(
+        "LANGSMITH_TRACING",
+        "true",
     ).lower() == "true"
+
+    LANGSMITH_API_KEY = os.getenv(
+        "LANGSMITH_API_KEY"
+    )
+
+    LANGSMITH_PROJECT = os.getenv(
+        "LANGSMITH_PROJECT",
+        "memory-vault",
+    )
+
 
 settings = Settings()
