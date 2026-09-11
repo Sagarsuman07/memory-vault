@@ -11,7 +11,9 @@ uploads/*
 memory_vault.db
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.db-shm
+*.db-wal
 
 .chroma/
-
-.streamlit/secrets.toml

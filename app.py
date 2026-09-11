@@ -1,11 +1,17 @@
 import streamlit as st
 
+from agent.graph import (
+    run_langgraph_agent,
+    create_thread_id,
+    get_default_thread_id,
+    get_thread_state,
+)
+
 from config.settings import settings
 
 from database.database import initialize_database
 
 from memory.memory_service import (
-    create_new_memory,
     list_memories,
     update_memory,
     delete_memory,
@@ -13,13 +19,6 @@ from memory.memory_service import (
     generate_memory_summary,
 )
 
-from agent.tools import run_tool_calling
-from agent.graph import (
-    run_langgraph_agent,
-    create_thread_id,
-    get_default_thread_id,
-    get_thread_state,
-)
 
 # ============================================================
 # Page Configuration
@@ -53,114 +52,40 @@ st.write(
     "Your personal AI memory assistant."
 )
 
-st.divider()
-
 
 # ============================================================
-# Upload Memory
+# Add Memory Entry Point
 # ============================================================
 
-st.header(
-    "Upload a Memory"
+st.subheader(
+    "Add a new memory"
 )
 
-
-uploaded_file = st.file_uploader(
-    "Choose a memory file",
-    type=[
-        # Documents
-        "pdf",
-        "docx",
-        "txt",
-
-        # Images
-        "jpg",
-        "jpeg",
-        "png",
-        "webp",
-        "gif",
-
-        # Audio
-        "mp3",
-        "wav",
-        "m4a",
-        "mpeg",
-        "mpga",
-        "webm",
-        "ogg",
-        "flac",
-    ],
+st.write(
+    "Save documents, photos, or voice recordings "
+    "to your personal memory vault."
 )
-
-
-title = st.text_input(
-    "Memory Title",
-    placeholder="e.g. Delhi Flight Ticket",
-)
-
 
 if st.button(
-    "Save Memory",
-    type="primary"
+    "+ Add Memory",
+    type="primary",
+    key="open_add_memory",
 ):
 
-    if uploaded_file is None:
-
-        st.warning(
-            "Please select a memory file."
-        )
-
-    elif not title.strip():
-
-        st.warning(
-            "Please enter a memory title."
-        )
-
-    else:
-
-        try:
-
-            memory = create_new_memory(
-                uploaded_file=uploaded_file,
-                title=title,
-                user_id=USER_ID,
-            )
+    st.switch_page(
+        "pages/add_memory.py"
+    )
 
 
-            st.success(
-                f"Memory '{memory.title}' "
-                "saved and indexed successfully."
-            )
-
-
-            st.rerun()
-
-
-        except ValueError as error:
-
-            st.error(
-                str(error)
-            )
-
-
-        except Exception as error:
-
-            st.error(
-                f"Something went wrong: {error}"
-            )
-
+# ============================================================
+# Dashboard
+# ============================================================
 
 st.divider()
-
-
-# ============================================================
-# Memory Dashboard
-# ============================================================
 
 st.header(
     "My Memories"
 )
-
 
 memories = list_memories(
     USER_ID
@@ -173,7 +98,6 @@ if not memories:
         "You haven't uploaded any memories yet."
     )
 
-
 else:
 
     for memory in memories:
@@ -182,19 +106,28 @@ else:
             border=True
         ):
 
-            # -----------------------------------------
-            # Icon
-            # -----------------------------------------
+            # ------------------------------------------------
+            # Memory Icon
+            # ------------------------------------------------
 
-            if memory["memory_type"] == "document":
+            if (
+                memory["memory_type"]
+                == "document"
+            ):
 
                 icon = "📄"
 
-            elif memory["memory_type"] == "image":
+            elif (
+                memory["memory_type"]
+                == "image"
+            ):
 
                 icon = "🖼️"
 
-            elif memory["memory_type"] == "audio":
+            elif (
+                memory["memory_type"]
+                == "audio"
+            ):
 
                 icon = "🎵"
 
@@ -202,22 +135,21 @@ else:
 
                 icon = "🧠"
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Title
-            # -----------------------------------------
+            # ------------------------------------------------
 
             st.subheader(
                 f"{icon} {memory['title']}"
             )
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Metadata
-            # -----------------------------------------
+            # ------------------------------------------------
 
-            col1, col2, col3 = st.columns(3)
-
+            col1, col2, col3 = st.columns(
+                3
+            )
 
             with col1:
 
@@ -226,14 +158,12 @@ else:
                     f"{memory['memory_type'].upper()}"
                 )
 
-
             with col2:
 
                 st.write(
                     f"**File:** "
                     f"{memory['file_name']}"
                 )
-
 
             with col3:
 
@@ -242,10 +172,9 @@ else:
                     f"{memory['created_at']}"
                 )
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Summary
-            # -----------------------------------------
+            # ------------------------------------------------
 
             if memory["summary"]:
 
@@ -260,14 +189,16 @@ else:
                     "**Summary:** Not available"
                 )
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Generate Summary
-            # -----------------------------------------
+            # ------------------------------------------------
 
             if st.button(
                 "Generate Summary",
-                key=f"generate_summary_{memory['id']}",
+                key=(
+                    f"generate_summary_"
+                    f"{memory['id']}"
+                ),
             ):
 
                 try:
@@ -281,63 +212,37 @@ else:
                             user_id=USER_ID,
                         )
 
-
-                    st.success(
-                        "AI title and summary generated successfully."
+                    st.toast(
+                        (
+                            "AI title and summary "
+                            "generated successfully."
+                        ),
+                        icon="✅",
                     )
-
 
                     st.rerun()
 
-
                 except ValueError as error:
 
-                    st.error(
-                        str(error)
+                    st.toast(
+                        str(error),
+                        icon="❌",
                     )
-
 
                 except Exception as error:
 
-                    st.error(
-                        f"Something went wrong while "
-                        f"generating the summary: {error}"
+                    st.toast(
+                        (
+                            "Something went wrong "
+                            "while generating the "
+                            f"summary: {error}"
+                        ),
+                        icon="❌",
                     )
 
-
-            # -----------------------------------------
-            # Memory ID
-            # -----------------------------------------
-
-            st.write(
-                f"**Memory ID:** "
-                f"`{memory['id']}`"
-            )
-
-
-            # -----------------------------------------
-            # User ID
-            # -----------------------------------------
-
-            st.write(
-                f"**User ID:** "
-                f"`{memory['user_id']}`"
-            )
-
-
-            # -----------------------------------------
-            # File Path
-            # -----------------------------------------
-
-            st.write(
-                f"**File Path:** "
-                f"`{memory['file_path']}`"
-            )
-
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Extracted Content
-            # -----------------------------------------
+            # ------------------------------------------------
 
             with st.expander(
                 "View Extracted Content"
@@ -347,17 +252,19 @@ else:
                     memory["extracted_text"]
                 )
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Edit Memory
-            # -----------------------------------------
+            # ------------------------------------------------
 
             with st.expander(
                 "Edit Memory"
             ):
 
                 with st.form(
-                    key=f"edit_form_{memory['id']}"
+                    key=(
+                        f"edit_form_"
+                        f"{memory['id']}"
+                    )
                 ):
 
                     edited_title = st.text_input(
@@ -365,17 +272,19 @@ else:
                         value=memory["title"],
                     )
 
-
                     edited_summary = st.text_area(
                         "Summary",
-                        value=memory["summary"] or "",
+                        value=(
+                            memory["summary"]
+                            or ""
+                        ),
                     )
 
-
-                    save_changes = st.form_submit_button(
-                        "Save Changes"
+                    save_changes = (
+                        st.form_submit_button(
+                            "Save Changes"
+                        )
                     )
-
 
                     if save_changes:
 
@@ -388,36 +297,44 @@ else:
                                 summary=edited_summary,
                             )
 
-
-                            st.success(
-                                "Memory updated successfully."
+                            st.toast(
+                                (
+                                    "Memory updated "
+                                    "successfully."
+                                ),
+                                icon="✅",
                             )
-
 
                             st.rerun()
 
-
                         except ValueError as error:
 
-                            st.error(
-                                str(error)
+                            st.toast(
+                                str(error),
+                                icon="❌",
                             )
-
 
                         except Exception as error:
 
-                            st.error(
-                                f"Something went wrong: {error}"
+                            st.toast(
+                                (
+                                    "Something went "
+                                    "wrong: "
+                                    f"{error}"
+                                ),
+                                icon="❌",
                             )
 
-
-            # -----------------------------------------
+            # ------------------------------------------------
             # Delete Memory
-            # -----------------------------------------
+            # ------------------------------------------------
 
             if st.button(
                 "Delete Memory",
-                key=f"delete_{memory['id']}"
+                key=(
+                    f"delete_"
+                    f"{memory['id']}"
+                ),
             ):
 
                 try:
@@ -427,31 +344,36 @@ else:
                         user_id=USER_ID,
                     )
 
-
-                    st.success(
-                        "Memory deleted successfully."
+                    st.toast(
+                        (
+                            "Memory deleted "
+                            "successfully."
+                        ),
+                        icon="✅",
                     )
-
 
                     st.rerun()
 
-
                 except ValueError as error:
 
-                    st.error(
-                        str(error)
+                    st.toast(
+                        str(error),
+                        icon="❌",
                     )
-
 
                 except Exception as error:
 
-                    st.error(
-                        f"Something went wrong: {error}"
+                    st.toast(
+                        (
+                            "Something went wrong: "
+                            f"{error}"
+                        ),
+                        icon="❌",
                     )
 
 
 # ============================================================
-# Ask Your Memories
+# Grounded RAG
 # ============================================================
 
 st.divider()
@@ -459,11 +381,6 @@ st.divider()
 st.header(
     "Ask Your Memories"
 )
-
-
-# ============================================================
-# Retrieval Scope
-# ============================================================
 
 search_scope = st.radio(
     "Search Scope",
@@ -474,13 +391,8 @@ search_scope = st.radio(
     horizontal=True,
 )
 
-
 selected_memory_id = None
 
-
-# ============================================================
-# Specific Memory Selection
-# ============================================================
 
 if search_scope == "Specific Memory":
 
@@ -497,33 +409,29 @@ if search_scope == "Specific Memory":
             for memory in memories
         }
 
+        selected_memory_title = (
+            st.selectbox(
+                "Select a memory",
+                options=list(
+                    memory_options.keys()
+                ),
+            )
+        )
 
-        selected_memory_title = st.selectbox(
-            "Select a memory",
-            options=list(
-                memory_options.keys()
-            ),
+        selected_memory_id = (
+            memory_options[
+                selected_memory_title
+            ]
         )
 
 
-        selected_memory_id = memory_options[
-            selected_memory_title
-        ]
-
-
-# ============================================================
-# Question
-# ============================================================
-
 question = st.text_input(
     "Ask a question about your memories",
-    placeholder="e.g. What is the price of the iPhone?",
+    placeholder=(
+        "e.g. What is the price of the iPhone?"
+    ),
 )
 
-
-# ============================================================
-# Ask Button
-# ============================================================
 
 if st.button(
     "Ask",
@@ -533,8 +441,9 @@ if st.button(
 
     if not question.strip():
 
-        st.warning(
-            "Please enter a question."
+        st.toast(
+            "Please enter a question.",
+            icon="⚠️",
         )
 
     elif (
@@ -542,8 +451,9 @@ if st.button(
         and selected_memory_id is None
     ):
 
-        st.warning(
-            "Please select a memory."
+        st.toast(
+            "Please select a memory.",
+            icon="⚠️",
         )
 
     else:
@@ -556,24 +466,13 @@ if st.button(
                 memory_id=selected_memory_id,
             )
 
-
-            # -----------------------------------------
-            # Answer
-            # -----------------------------------------
-
             st.subheader(
                 "Answer"
             )
 
-
             st.write(
                 result["answer"]
             )
-
-
-            # -----------------------------------------
-            # Sources
-            # -----------------------------------------
 
             if result["grounded"]:
 
@@ -581,8 +480,9 @@ if st.button(
                     "Sources"
                 )
 
-
-                for source in result["sources"]:
+                for source in result[
+                    "sources"
+                ]:
 
                     st.write(
                         f"- Memory ID: "
@@ -599,129 +499,20 @@ if st.button(
                         f"`{source['distance']:.4f}`"
                     )
 
-
         except Exception as error:
 
-            st.error(
-                "Something went wrong while answering "
-                f"your question: {error}"
+            st.toast(
+                (
+                    "Something went wrong "
+                    "while answering your "
+                    f"question: {error}"
+                ),
+                icon="❌",
             )
-
-
-
 
 
 # ============================================================
-# Tool Calling Assistant
-# ============================================================
-
-st.divider()
-
-st.header(
-    "Ask Memory Vault Agent"
-)
-
-st.write(
-    "The LLM can decide when to use memory search, "
-    "memory lookup, calculation, or web search."
-)
-
-
-agent_question = st.text_input(
-    "Ask the tool-calling assistant",
-    placeholder=(
-        "e.g. What is the total price of my saved products?"
-    ),
-    key="agent_question",
-)
-
-
-if st.button(
-    "Ask Agent",
-    type="primary",
-    key="ask_agent",
-):
-
-    if not agent_question.strip():
-
-        st.warning(
-            "Please enter a question."
-        )
-
-    else:
-
-        try:
-
-            with st.spinner(
-                "Thinking and using tools..."
-            ):
-
-                result = run_tool_calling(
-                    question=agent_question,
-                    user_id=USER_ID,
-                )
-
-
-            # -----------------------------------------
-            # Final Answer
-            # -----------------------------------------
-
-            st.subheader(
-                "Answer"
-            )
-
-            st.write(
-                result["answer"]
-            )
-
-
-            # -----------------------------------------
-            # Tool Calls
-            # -----------------------------------------
-
-            if result["tool_calls"]:
-
-                st.subheader(
-                    "Tool Calls"
-                )
-
-
-                for index, call in enumerate(
-                    result["tool_calls"],
-                    start=1,
-                ):
-
-                    st.write(
-                        f"**Tool {index}:** "
-                        f"`{call['tool']}`"
-                    )
-
-
-                    st.json(
-                        call["arguments"]
-                    )
-
-
-            else:
-
-                st.info(
-                    "No tool was required for this question."
-                )
-
-
-        except Exception as error:
-
-            st.error(
-                "Something went wrong while running "
-                f"the tool-calling assistant: {error}"
-            )
-
-
-
-
-
-# ============================================================
-# LangGraph Agent — Short-Term Memory
+# LangGraph Agent
 # ============================================================
 
 st.divider()
@@ -738,10 +529,13 @@ st.write(
 
 
 # ============================================================
-# Initialize Conversation Thread
+# Thread Initialization
 # ============================================================
 
-if "langgraph_thread_id" not in st.session_state:
+if (
+    "langgraph_thread_id"
+    not in st.session_state
+):
 
     st.session_state.langgraph_thread_id = (
         get_default_thread_id(
@@ -773,13 +567,15 @@ if st.button(
 # ============================================================
 
 st.caption(
-    "Current conversation: "
-    f"`{st.session_state.langgraph_thread_id}`"
+    (
+        "Current conversation: "
+        f"`{st.session_state.langgraph_thread_id}`"
+    )
 )
 
 
 # ============================================================
-# Load Conversation History
+# Load Thread State
 # ============================================================
 
 try:
@@ -787,10 +583,10 @@ try:
     thread_state = get_thread_state(
         user_id=USER_ID,
         thread_id=(
-            st.session_state.langgraph_thread_id
+            st.session_state
+            .langgraph_thread_id
         ),
     )
-
 
     conversation_messages = (
         thread_state.values.get(
@@ -805,7 +601,7 @@ except Exception:
 
 
 # ============================================================
-# Display Conversation History
+# Display Conversation
 # ============================================================
 
 for message in conversation_messages:
@@ -815,11 +611,6 @@ for message in conversation_messages:
         "type",
         "",
     )
-
-
-    # --------------------------------------------------------
-    # Human Message
-    # --------------------------------------------------------
 
     if message_type == "human":
 
@@ -831,15 +622,9 @@ for message in conversation_messages:
                 message.content
             )
 
-
-    # --------------------------------------------------------
-    # AI Message
-    # --------------------------------------------------------
-
     elif message_type == "ai":
 
         content = message.content
-
 
         if content:
 
@@ -853,17 +638,13 @@ for message in conversation_messages:
 
 
 # ============================================================
-# Chat Input
+# LangGraph Chat Input
 # ============================================================
 
 langgraph_question = st.chat_input(
     "Ask Memory Vault anything..."
 )
 
-
-# ============================================================
-# Run Agent
-# ============================================================
 
 if langgraph_question:
 
@@ -873,7 +654,7 @@ if langgraph_question:
             "Memory Vault is thinking..."
         ):
 
-            result = run_langgraph_agent(
+            run_langgraph_agent(
                 question=langgraph_question,
                 user_id=USER_ID,
                 thread_id=(
@@ -882,17 +663,15 @@ if langgraph_question:
                 ),
             )
 
-
-        # ----------------------------------------------------
-        # Final Answer
-        # ----------------------------------------------------
-
         st.rerun()
-
 
     except Exception as error:
 
-        st.error(
-            "Something went wrong while running "
-            f"the LangGraph agent: {error}"
+        st.toast(
+            (
+                "Something went wrong while "
+                "running the LangGraph agent: "
+                f"{error}"
+            ),
+            icon="❌",
         )
