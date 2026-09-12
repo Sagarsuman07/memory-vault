@@ -122,6 +122,7 @@ def validate_thread_id(
 
 def build_agent_graph(
     user_id: str,
+    memory_id: str | None = None,
 ):
 
     if not user_id or not user_id.strip():
@@ -131,12 +132,20 @@ def build_agent_graph(
         )
 
 
+    if memory_id is not None and not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+
     # ========================================================
-    # Create tools for current user
+    # Create tools for current user + current scope
     # ========================================================
 
     tools = create_tools(
-        user_id=user_id
+        user_id=user_id,
+        memory_id=memory_id,
     )
 
 
@@ -257,6 +266,7 @@ def run_langgraph_agent(
     question: str,
     user_id: str,
     thread_id: str,
+    memory_id: str | None = None,
 ):
 
     if not question or not question.strip():
@@ -270,6 +280,13 @@ def run_langgraph_agent(
 
         raise ValueError(
             "User ID cannot be empty."
+        )
+
+
+    if memory_id is not None and not memory_id.strip():
+
+        raise ValueError(
+            "Memory ID cannot be empty."
         )
 
 
@@ -288,7 +305,8 @@ def run_langgraph_agent(
     # ========================================================
 
     graph = build_agent_graph(
-        user_id=user_id
+        user_id=user_id,
+        memory_id=memory_id,
     )
 
 
@@ -311,6 +329,14 @@ def run_langgraph_agent(
         "user_id": user_id,
 
         "question": question.strip(),
+
+        "scope": (
+            "memory"
+            if memory_id is not None
+            else "all"
+        ),
+
+        "memory_id": memory_id,
 
         "final_answer": "",
 
@@ -361,6 +387,14 @@ def run_langgraph_agent(
         ),
 
         "thread_id": thread_id,
+
+        "scope": (
+            "memory"
+            if memory_id is not None
+            else "all"
+        ),
+
+        "memory_id": memory_id,
     }
 
 
@@ -373,28 +407,16 @@ def get_thread_state(
     thread_id: str,
 ):
 
-    # ========================================================
-    # Validate thread ownership
-    # ========================================================
-
     validate_thread_id(
         user_id=user_id,
         thread_id=thread_id,
     )
 
 
-    # ========================================================
-    # Build graph
-    # ========================================================
-
     graph = build_agent_graph(
         user_id=user_id
     )
 
-
-    # ========================================================
-    # Thread configuration
-    # ========================================================
 
     config = {
         "configurable": {
@@ -402,10 +424,6 @@ def get_thread_state(
         }
     }
 
-
-    # ========================================================
-    # Retrieve state
-    # ========================================================
 
     return graph.get_state(
         config
