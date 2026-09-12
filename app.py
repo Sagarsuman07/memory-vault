@@ -173,7 +173,7 @@ def sync_memory_selection(
 
 
 # ============================================================
-# Compact + Sticky Dashboard UI
+# Compact Dashboard UI (sticky behavior removed)
 # ============================================================
 
 st.markdown(
@@ -182,8 +182,7 @@ st.markdown(
 
     /* --------------------------------------------------------
        Reduce unused space at the top
-       FIX: raised from 0.35rem so content clears Streamlit's
-       fixed toolbar instead of rendering underneath/cropped by it
+       Keeps content clear of Streamlit's fixed toolbar
        -------------------------------------------------------- */
 
     [data-testid="stMainBlockContainer"] {
@@ -192,22 +191,11 @@ st.markdown(
 
 
     /* --------------------------------------------------------
-       Sticky dashboard header
-       FIX: top offset matches the new padding-top above so the
-       header docks flush under the toolbar with no overlap, and
-       align-self: flex-start is added because Streamlit renders
-       this container inside a flex column — without it, sticky
-       positioning silently fails to stick.
+       Dashboard header container
+       (sticky positioning removed — now scrolls normally)
        -------------------------------------------------------- */
 
     .st-key-dashboard-sticky-header {
-        position: sticky;
-        top: 3.75rem;
-        z-index: 1000;
-        align-self: flex-start;
-
-        background: var(--background-color);
-
         padding-top: 0.20rem;
         padding-bottom: 0.45rem;
 
@@ -439,7 +427,7 @@ with st.sidebar:
 
 
 # ============================================================
-# Sticky Dashboard Header
+# Dashboard Header (no longer sticky)
 # ============================================================
 
 with st.container(
