@@ -1,6 +1,9 @@
 
 
-langsmith
+Pillow
+reportlab
+
+#langsmith
 
 #langgraph-checkpoint-sqlite
 

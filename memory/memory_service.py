@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
+import io
 import uuid
+import wave
 
 from langchain_groq import ChatGroq
 
@@ -40,10 +42,6 @@ from rag.grounding import (
 )
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
 UPLOAD_DIR = Path(
     settings.UPLOAD_DIR
 )
@@ -55,20 +53,14 @@ UPLOAD_DIR.mkdir(
 
 
 ALLOWED_EXTENSIONS = {
-
-    # Documents
     ".pdf",
     ".docx",
     ".txt",
-
-    # Images
     ".jpg",
     ".jpeg",
     ".png",
     ".webp",
     ".gif",
-
-    # Audio
     ".mp3",
     ".wav",
     ".m4a",
@@ -97,59 +89,20 @@ def create_new_memory(
         Callable[[str], None]
     ] = None,
 ):
-    """
-    Create a new memory using the existing
-    ingestion and RAG architecture.
-
-    Phase 13 only adds progress reporting.
-
-    Pipeline:
-
-        Upload
-          ↓
-        Extract
-          ↓
-        SQLite
-          ↓
-        Chunk
-          ↓
-        Embedding
-          ↓
-        Chroma
-          ↓
-        Done
-    """
-
-    # ========================================================
-    # Validate uploaded file
-    # ========================================================
-
     if uploaded_file is None:
         raise ValueError(
             "No file was provided."
         )
-
-    # ========================================================
-    # Validate user
-    # ========================================================
 
     if not user_id or not user_id.strip():
         raise ValueError(
             "User ID cannot be empty."
         )
 
-    # ========================================================
-    # Validate title
-    # ========================================================
-
     if not title or not title.strip():
         raise ValueError(
             "Memory title cannot be empty."
         )
-
-    # ========================================================
-    # Get file information
-    # ========================================================
 
     file_name = uploaded_file.name
 
@@ -157,18 +110,10 @@ def create_new_memory(
         file_name
     ).suffix.lower()
 
-    # ========================================================
-    # Validate extension
-    # ========================================================
-
     if extension not in ALLOWED_EXTENSIONS:
         raise ValueError(
             f"Unsupported file type: {extension}"
         )
-
-    # ========================================================
-    # Read file bytes
-    # ========================================================
 
     file_bytes = uploaded_file.getvalue()
 
@@ -177,34 +122,18 @@ def create_new_memory(
             "The selected file is empty."
         )
 
-    # ========================================================
-    # Validate file size
-    # ========================================================
-
     if len(file_bytes) > MAX_FILE_SIZE:
         raise ValueError(
             "File size cannot exceed 10 MB."
         )
 
-    # ========================================================
-    # Generate memory ID
-    # ========================================================
-
     memory_id = str(
         uuid.uuid4()
     )
 
-    # ========================================================
-    # Determine memory type
-    # ========================================================
-
     memory_type = get_memory_type(
         file_name
     )
-
-    # ========================================================
-    # Save original file
-    # ========================================================
 
     file_path = (
         UPLOAD_DIR
@@ -218,7 +147,7 @@ def create_new_memory(
     try:
 
         # ====================================================
-        # Stage 1: Extracting
+        # Extracting
         # ====================================================
 
         if progress_callback:
@@ -240,7 +169,7 @@ def create_new_memory(
             )
 
         # ====================================================
-        # Create Memory object
+        # SQLite Memory
         # ====================================================
 
         now = datetime.now(
@@ -260,16 +189,12 @@ def create_new_memory(
             updated_at=now,
         )
 
-        # ====================================================
-        # Save memory to SQLite
-        # ====================================================
-
         create_memory(
             memory
         )
 
         # ====================================================
-        # Create chunks
+        # Chunking
         # ====================================================
 
         chunks = split_text(
@@ -283,7 +208,6 @@ def create_new_memory(
             )
 
         # ====================================================
-        # Stage 2 + 3:
         # Embedding + Indexing
         # ====================================================
 
@@ -296,7 +220,7 @@ def create_new_memory(
         )
 
         # ====================================================
-        # Stage 4: Done
+        # Done
         # ====================================================
 
         if progress_callback:
@@ -308,15 +232,10 @@ def create_new_memory(
 
     except Exception:
 
-        # ====================================================
-        # Cleanup Chroma vectors
-        # ====================================================
-
+        # Remove vectors.
         try:
 
-            vector_store = (
-                get_vector_store()
-            )
+            vector_store = get_vector_store()
 
             vector_store.delete(
                 where={
@@ -327,22 +246,15 @@ def create_new_memory(
         except Exception:
             pass
 
-        # ====================================================
-        # Cleanup original file
-        # ====================================================
-
+        # Remove original file.
         if file_path.exists():
 
             try:
                 file_path.unlink()
-
             except Exception:
                 pass
 
-        # ====================================================
-        # Cleanup SQLite record
-        # ====================================================
-
+        # Remove database record.
         try:
 
             delete_memory_record(
@@ -399,8 +311,15 @@ def list_memories(
             "User ID cannot be empty."
         )
 
-    return get_all_memories(
+    memories = get_all_memories(
         user_id
+    )
+
+    # Always keep dashboard chronology deterministic.
+    return sorted(
+        memories,
+        key=lambda memory: memory["created_at"],
+        reverse=True,
     )
 
 
@@ -448,7 +367,7 @@ def update_memory(
 
 
 # ============================================================
-# Delete Memory
+# Delete Single Memory
 # ============================================================
 
 def delete_memory(
@@ -465,6 +384,7 @@ def delete_memory(
             "Memory ID cannot be empty."
         )
 
+    # User-scoped ownership validation.
     memory = get_memory(
         memory_id,
         user_id,
@@ -476,23 +396,16 @@ def delete_memory(
         )
 
     # ========================================================
-    # Delete vectors
+    # Delete vector records
     # ========================================================
 
-    try:
+    vector_store = get_vector_store()
 
-        vector_store = (
-            get_vector_store()
-        )
-
-        vector_store.delete(
-            where={
-                "memory_id": memory_id
-            }
-        )
-
-    except Exception:
-        pass
+    vector_store.delete(
+        where={
+            "memory_id": memory_id
+        }
+    )
 
     # ========================================================
     # Delete original file
@@ -503,7 +416,13 @@ def delete_memory(
     )
 
     if file_path.exists():
-        file_path.unlink()
+
+        try:
+            file_path.unlink()
+        except OSError as error:
+            raise RuntimeError(
+                "Memory file could not be deleted."
+            ) from error
 
     # ========================================================
     # Delete database record
@@ -521,32 +440,690 @@ def delete_memory(
 
 
 # ============================================================
-# Manual Re-index Existing Memory
+# Bulk Delete
+# ============================================================
+
+def delete_memories(
+    memory_ids: list[str],
+    user_id: str,
+):
+    """
+    Delete multiple memories.
+
+    Every memory is resolved using the current user_id
+    before deletion. This prevents one user from deleting
+    another user's memory.
+    """
+
+    if not user_id or not user_id.strip():
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+    if not memory_ids:
+        return 0
+
+    unique_memory_ids = list(
+        dict.fromkeys(
+            memory_ids
+        )
+    )
+
+    # ========================================================
+    # Validate ownership of ALL memories first.
+    # ========================================================
+
+    memories = []
+
+    for memory_id in unique_memory_ids:
+
+        if (
+            not memory_id
+            or not memory_id.strip()
+        ):
+            raise ValueError(
+                "Memory ID cannot be empty."
+            )
+
+        memory = get_memory(
+            memory_id,
+            user_id,
+        )
+
+        if memory is None:
+            raise ValueError(
+                "One or more selected memories "
+                "do not belong to the current user."
+            )
+
+        memories.append(
+            memory
+        )
+
+    # ========================================================
+    # Delete only after ownership validation succeeds.
+    # ========================================================
+
+    for memory in memories:
+
+        delete_memory(
+            memory_id=memory["id"],
+            user_id=user_id,
+        )
+
+    return len(
+        memories
+    )
+
+
+# ============================================================
+# Demo Helpers
+# ============================================================
+
+def _create_demo_text_file(
+    file_name: str,
+    content: str,
+):
+    path = (
+        UPLOAD_DIR
+        / file_name
+    )
+
+    path.write_text(
+        content,
+        encoding="utf-8",
+    )
+
+    return path
+
+
+def _create_demo_pdf(
+    file_name: str,
+):
+    """
+    Create a small real PDF for the demo.
+    """
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    path = (
+        UPLOAD_DIR
+        / file_name
+    )
+
+    pdf = canvas.Canvas(
+        str(path),
+        pagesize=A4,
+    )
+
+    pdf.setFont(
+        "Helvetica",
+        16,
+    )
+
+    pdf.drawString(
+        60,
+        800,
+        "Delhi Travel Plan",
+    )
+
+    pdf.setFont(
+        "Helvetica",
+        11,
+    )
+
+    lines = [
+        "Travel destination: Delhi",
+        "Flight: 6E123",
+        "Travel date: 15 September 2026",
+        "Hotel: Hotel ABC",
+        "Hotel stay: 15–18 September 2026",
+        "Important place: India Gate",
+        "Estimated hotel cost: ₹5,000 per night",
+    ]
+
+    y = 770
+
+    for line in lines:
+
+        pdf.drawString(
+            60,
+            y,
+            line,
+        )
+
+        y -= 22
+
+    pdf.save()
+
+    return path
+
+
+def _create_demo_image(
+    file_name: str,
+    title: str,
+    lines: list[str],
+):
+    """
+    Create a real PNG demo image.
+
+    The generated image is still sent through the
+    normal image extraction pipeline.
+    """
+
+    from PIL import Image, ImageDraw
+
+    path = (
+        UPLOAD_DIR
+        / file_name
+    )
+
+    image = Image.new(
+        "RGB",
+        (
+            1200,
+            700,
+        ),
+        "white",
+    )
+
+    draw = ImageDraw.Draw(
+        image
+    )
+
+    draw.text(
+        (70, 70),
+        title,
+        fill="black",
+    )
+
+    y = 180
+
+    for line in lines:
+
+        draw.text(
+            (90, y),
+            line,
+            fill="black",
+        )
+
+        y += 70
+
+    image.save(
+        path,
+        format="PNG",
+    )
+
+    return path
+
+
+def _create_demo_audio(
+    file_name: str,
+):
+    """
+    Create a valid WAV container for the demo.
+
+    The demo transcript is supplied through the same
+    memory indexing path below because generating
+    speech locally would require introducing a new
+    TTS dependency.
+    """
+
+    path = (
+        UPLOAD_DIR
+        / file_name
+    )
+
+    sample_rate = 16000
+    duration_seconds = 1
+
+    frame_count = (
+        sample_rate
+        * duration_seconds
+    )
+
+    audio_data = (
+        b"\x00\x00"
+        * frame_count
+    )
+
+    with wave.open(
+        str(path),
+        "wb",
+    ) as audio:
+
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(
+            sample_rate
+        )
+
+        audio.writeframes(
+            audio_data
+        )
+
+    return path
+
+
+def _create_memory_from_demo_text(
+    title: str,
+    file_path: Path,
+    memory_type: str,
+    extracted_text: str,
+    user_id: str,
+):
+    """
+    Create a demo memory and use the normal
+    chunk → embedding → Chroma indexing pipeline.
+
+    This is used only where an external extraction
+    service is not practical for deterministic demo
+    setup.
+    """
+
+    memory_id = str(
+        uuid.uuid4()
+    )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    memory = Memory(
+        id=memory_id,
+        user_id=user_id,
+        memory_type=memory_type,
+        title=title,
+        file_name=file_path.name,
+        file_path=str(file_path),
+        summary=None,
+        extracted_text=extracted_text,
+        created_at=now,
+        updated_at=now,
+    )
+
+    create_memory(
+        memory
+    )
+
+    try:
+
+        chunks = split_text(
+            extracted_text
+        )
+
+        if not chunks:
+            raise ValueError(
+                "No chunks could be created."
+            )
+
+        index_memory(
+            memory_id=memory.id,
+            user_id=memory.user_id,
+            memory_type=memory.memory_type,
+            chunks=chunks,
+        )
+
+        return memory
+
+    except Exception:
+
+        try:
+
+            vector_store = get_vector_store()
+
+            vector_store.delete(
+                where={
+                    "memory_id": memory_id
+                }
+            )
+
+        except Exception:
+            pass
+
+        try:
+            file_path.unlink()
+        except Exception:
+            pass
+
+        try:
+
+            delete_memory_record(
+                memory_id,
+                user_id,
+            )
+
+        except Exception:
+            pass
+
+        raise
+
+
+def load_demo_memories(
+    user_id: str,
+):
+    """
+    Create a repeatable demo environment.
+
+    Demo memories are identified using the [Demo]
+    title prefix. Existing demo memories are reused
+    rather than duplicated.
+    """
+
+    if not user_id or not user_id.strip():
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+    existing_memories = list_memories(
+        user_id
+    )
+
+    existing_demo_titles = {
+        memory["title"]
+        for memory in existing_memories
+        if memory["title"].startswith(
+            "[Demo]"
+        )
+    }
+
+    demo_definitions = [
+        {
+            "title": "[Demo] Flight Ticket",
+            "type": "image",
+            "file_name": "demo_flight.png",
+            "text": (
+                "Flight ticket. "
+                "Flight number 6E123. "
+                "Route Hyderabad to Delhi. "
+                "Travel date 15 September 2026. "
+                "Ticket price ₹8,500."
+            ),
+        },
+        {
+            "title": "[Demo] Hotel Booking",
+            "type": "document",
+            "file_name": "demo_hotel.txt",
+            "text": (
+                "Hotel booking. "
+                "Hotel ABC in Delhi. "
+                "Stay from 15 September 2026 "
+                "to 18 September 2026. "
+                "Room cost ₹5,000 per night."
+            ),
+        },
+        {
+            "title": "[Demo] Sony Headphones",
+            "type": "image",
+            "file_name": "demo_headphones.png",
+            "text": (
+                "Product information. "
+                "Sony headphones. "
+                "Listed price ₹25,000."
+            ),
+        },
+        {
+            "title": "[Demo] Delhi Trip Voice Note",
+            "type": "audio",
+            "file_name": "demo_voice_note.wav",
+            "text": (
+                "Remember to visit India Gate "
+                "during the Delhi trip."
+            ),
+        },
+        {
+            "title": "[Demo] Delhi Travel Plan",
+            "type": "document",
+            "file_name": "demo_travel_plan.pdf",
+            "text": (
+                "Delhi travel plan. "
+                "Flight 6E123 from Hyderabad to Delhi "
+                "on 15 September 2026. "
+                "Hotel ABC from 15 to 18 September. "
+                "Remember to visit India Gate."
+            ),
+        },
+    ]
+
+    created = []
+
+    for demo in demo_definitions:
+
+        if demo["title"] in existing_demo_titles:
+            continue
+
+        file_name = demo[
+            "file_name"
+        ]
+
+        file_path = (
+            UPLOAD_DIR
+            / file_name
+        )
+
+        # ----------------------------------------------------
+        # Flight image
+        # ----------------------------------------------------
+
+        if demo["title"] == "[Demo] Flight Ticket":
+
+            _create_demo_image(
+                file_name=file_name,
+                title="Flight Ticket",
+                lines=[
+                    "IndiGo 6E123",
+                    "Hyderabad → Delhi",
+                    "15 September 2026",
+                    "₹8,500",
+                ],
+            )
+
+            # Use the actual image pipeline.
+            class DemoFile:
+
+                def __init__(
+                    self,
+                    path,
+                ):
+                    self.name = path.name
+
+                def getvalue(self):
+                    return file_path.read_bytes()
+
+            try:
+
+                memory = create_new_memory(
+                    uploaded_file=DemoFile(
+                        file_path
+                    ),
+                    title=demo["title"],
+                    user_id=user_id,
+                )
+
+                created.append(
+                    memory
+                )
+
+            except Exception:
+
+                if file_path.exists():
+                    file_path.unlink()
+
+                raise
+
+        # ----------------------------------------------------
+        # Hotel text document
+        # ----------------------------------------------------
+
+        elif demo["title"] == "[Demo] Hotel Booking":
+
+            _create_demo_text_file(
+                file_name=file_name,
+                content=demo["text"],
+            )
+
+            class DemoFile:
+
+                def __init__(
+                    self,
+                    path,
+                ):
+                    self.name = path.name
+
+                def getvalue(self):
+                    return file_path.read_bytes()
+
+            try:
+
+                memory = create_new_memory(
+                    uploaded_file=DemoFile(
+                        file_path
+                    ),
+                    title=demo["title"],
+                    user_id=user_id,
+                )
+
+                created.append(
+                    memory
+                )
+
+            except Exception:
+
+                if file_path.exists():
+                    file_path.unlink()
+
+                raise
+
+        # ----------------------------------------------------
+        # Product image
+        # ----------------------------------------------------
+
+        elif demo["title"] == "[Demo] Sony Headphones":
+
+            _create_demo_image(
+                file_name=file_name,
+                title="Sony Headphones",
+                lines=[
+                    "Sony WH Series",
+                    "Premium Headphones",
+                    "Price: ₹25,000",
+                ],
+            )
+
+            class DemoFile:
+
+                def __init__(
+                    self,
+                    path,
+                ):
+                    self.name = path.name
+
+                def getvalue(self):
+                    return file_path.read_bytes()
+
+            try:
+
+                memory = create_new_memory(
+                    uploaded_file=DemoFile(
+                        file_path
+                    ),
+                    title=demo["title"],
+                    user_id=user_id,
+                )
+
+                created.append(
+                    memory
+                )
+
+            except Exception:
+
+                if file_path.exists():
+                    file_path.unlink()
+
+                raise
+
+        # ----------------------------------------------------
+        # Voice note
+        # ----------------------------------------------------
+
+        elif demo["title"] == "[Demo] Delhi Trip Voice Note":
+
+            _create_demo_audio(
+                file_name=file_name
+            )
+
+            # A deterministic demo transcript is indexed
+            # through the normal chunk/embedding/index path.
+            memory = _create_memory_from_demo_text(
+                title=demo["title"],
+                file_path=file_path,
+                memory_type="audio",
+                extracted_text=demo["text"],
+                user_id=user_id,
+            )
+
+            created.append(
+                memory
+            )
+
+        # ----------------------------------------------------
+        # Travel PDF
+        # ----------------------------------------------------
+
+        elif demo["title"] == "[Demo] Delhi Travel Plan":
+
+            _create_demo_pdf(
+                file_name=file_name
+            )
+
+            class DemoFile:
+
+                def __init__(
+                    self,
+                    path,
+                ):
+                    self.name = path.name
+
+                def getvalue(self):
+                    return file_path.read_bytes()
+
+            try:
+
+                memory = create_new_memory(
+                    uploaded_file=DemoFile(
+                        file_path
+                    ),
+                    title=demo["title"],
+                    user_id=user_id,
+                )
+
+                created.append(
+                    memory
+                )
+
+            except Exception:
+
+                if file_path.exists():
+                    file_path.unlink()
+
+                raise
+
+    return created
+
+
+# ============================================================
+# Re-index Existing Memory
 # ============================================================
 
 def index_existing_memory(
     memory_id: str,
     user_id: str,
 ):
-    if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
-
-    if not memory_id or not memory_id.strip():
-        raise ValueError(
-            "Memory ID cannot be empty."
-        )
-
-    memory = get_memory(
+    memory = get_memory_by_id(
         memory_id,
         user_id,
     )
-
-    if memory is None:
-        raise ValueError(
-            "Memory not found."
-        )
 
     extracted_text = memory[
         "extracted_text"
@@ -632,7 +1209,7 @@ def get_safety_model():
 
 
 # ============================================================
-# Check Content Safety
+# Content Safety
 # ============================================================
 
 def check_content_safety(
@@ -665,38 +1242,25 @@ def check_content_safety(
     ):
         return False
 
-    result = result.strip().upper()
-
-    return result == "ALLOW"
+    return (
+        result.strip().upper()
+        == "ALLOW"
+    )
 
 
 # ============================================================
-# Generate Memory Summary
+# Generate Summary
 # ============================================================
 
 def generate_memory_summary(
     memory_id: str,
     user_id: str,
 ):
-    if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
 
-    if not memory_id or not memory_id.strip():
-        raise ValueError(
-            "Memory ID cannot be empty."
-        )
-
-    memory = get_memory(
+    memory = get_memory_by_id(
         memory_id,
         user_id,
     )
-
-    if memory is None:
-        raise ValueError(
-            "Memory not found."
-        )
 
     extracted_text = memory[
         "extracted_text"
@@ -724,7 +1288,8 @@ def generate_memory_summary(
 
     prompt = SUMMARY_PROMPT.invoke(
         {
-            "extracted_text": extracted_text,
+            "extracted_text":
+                extracted_text,
         }
     )
 
@@ -744,28 +1309,25 @@ def generate_memory_summary(
 
     content = content.strip()
 
-    title_marker = "TITLE:"
-    summary_marker = "SUMMARY:"
-
-    if title_marker not in content:
+    if "TITLE:" not in content:
         raise ValueError(
             "Summary response does not contain "
             "a TITLE section."
         )
 
-    if summary_marker not in content:
+    if "SUMMARY:" not in content:
         raise ValueError(
             "Summary response does not contain "
             "a SUMMARY section."
         )
 
     title_part = content.split(
-        title_marker,
+        "TITLE:",
         1,
     )[1]
 
     title_part = title_part.split(
-        summary_marker,
+        "SUMMARY:",
         1,
     )[0]
 
@@ -775,7 +1337,7 @@ def generate_memory_summary(
 
     generated_summary = (
         content.split(
-            summary_marker,
+            "SUMMARY:",
             1,
         )[1]
         .strip()
@@ -810,12 +1372,13 @@ def generate_memory_summary(
 
 
 # ============================================================
-# Build RAG Context
+# Build Context
 # ============================================================
 
 def build_context(
     grounded_results,
 ):
+
     context_parts = []
 
     for rank, (
@@ -844,7 +1407,7 @@ Content:
 
 
 # ============================================================
-# Answer Question
+# Grounded QA
 # ============================================================
 
 def answer_question(
@@ -852,6 +1415,7 @@ def answer_question(
     user_id: str,
     memory_id: str | None = None,
 ):
+
     if not question or not question.strip():
         raise ValueError(
             "Question cannot be empty."
@@ -862,16 +1426,13 @@ def answer_question(
             "User ID cannot be empty."
         )
 
-    if memory_id is not None:
-
-        if not memory_id.strip():
-            raise ValueError(
-                "Memory ID cannot be empty."
-            )
-
-    # ========================================================
-    # Retrieve
-    # ========================================================
+    if (
+        memory_id is not None
+        and not memory_id.strip()
+    ):
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
 
     results = retrieve(
         question=question,
@@ -880,19 +1441,11 @@ def answer_question(
         memory_id=memory_id,
     )
 
-    # ========================================================
-    # Grounding threshold
-    # ========================================================
-
     grounded_results = (
         get_grounded_results(
             results
         )
     )
-
-    # ========================================================
-    # Not found
-    # ========================================================
 
     if not grounded_results:
 
@@ -905,32 +1458,22 @@ def answer_question(
             "grounded": False,
         }
 
-    # ========================================================
-    # Build context
-    # ========================================================
-
     context = build_context(
         grounded_results
     )
 
-    # ========================================================
-    # Ask LLM
-    # ========================================================
-
     model = get_qa_model()
 
-    messages = QA_PROMPT.format_messages(
-        context=context,
-        question=question,
+    messages = (
+        QA_PROMPT.format_messages(
+            context=context,
+            question=question,
+        )
     )
 
     response = model.invoke(
         messages
     )
-
-    # ========================================================
-    # Sources
-    # ========================================================
 
     sources = []
 
