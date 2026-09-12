@@ -2,6 +2,8 @@ import ast
 import operator as op
 
 from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
 from config.settings import settings
@@ -176,7 +178,22 @@ def calculate_expression(
 
 def create_tools(
     user_id: str,
+    memory_id: str | None = None,
 ):
+
+    if not user_id or not user_id.strip():
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+    if memory_id is not None and not memory_id.strip():
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+    # memory_id is application-controlled.
+    # The LLM never chooses the retrieval scope.
+
 
     # ========================================================
     # Tool 1 — Search Memories
@@ -189,8 +206,8 @@ def create_tools(
         """
         Search the user's saved memories using semantic search.
 
-        Use this tool when the user asks about information
-        that may exist in their saved memories.
+        The search is automatically restricted to the current
+        chat scope. The model cannot choose user_id or memory_id.
         """
 
         if not query or not query.strip():
@@ -204,7 +221,7 @@ def create_tools(
             question=query,
             user_id=user_id,
             top_k=5,
-            memory_id=None,
+            memory_id=memory_id,
         )
 
 
@@ -259,24 +276,41 @@ Content:
 
     @tool
     def get_memory(
-        memory_id: str,
+        memory_id_requested: str,
     ) -> str:
         """
         Get detailed information about one saved memory.
 
-        Use this tool when a specific memory ID is known
-        and more information about that memory is required.
+        In a memory-scoped chat, this operation is restricted
+        to the selected memory.
         """
 
-        if not memory_id or not memory_id.strip():
+        if (
+            not memory_id_requested
+            or not memory_id_requested.strip()
+        ):
 
             return (
                 "Memory ID cannot be empty."
             )
 
 
+        # ----------------------------------------------------
+        # Scope security
+        # ----------------------------------------------------
+
+        if (
+            memory_id is not None
+            and memory_id_requested != memory_id
+        ):
+
+            return (
+                "Memory not found."
+            )
+
+
         memory = get_memory_record(
-            memory_id=memory_id,
+            memory_id=memory_id_requested,
             user_id=user_id,
         )
 
@@ -413,188 +447,3 @@ Extracted Content:
         calculate,
         search_web,
     ]
-
-
-
-
-from langchain_groq import ChatGroq
-from langchain_core.messages import (
-    HumanMessage,
-    SystemMessage,
-)
-
-
-# ============================================================
-# Tool Calling
-# ============================================================
-
-def run_tool_calling(
-    question: str,
-    user_id: str,
-    max_iterations: int = 5,
-):
-
-    if not question or not question.strip():
-
-        raise ValueError(
-            "Question cannot be empty."
-        )
-
-
-    tools = create_tools(
-        user_id
-    )
-
-
-    tool_map = {
-        tool.name: tool
-        for tool in tools
-    }
-
-
-    # ========================================================
-    # Create LLM
-    # ========================================================
-
-    if not settings.GROQ_API_KEY:
-
-        raise ValueError(
-            "GROQ_API_KEY is not configured."
-        )
-
-
-    model = ChatGroq(
-        model=settings.GROQ_LLM_MODEL,
-        temperature=0,
-        api_key=settings.GROQ_API_KEY,
-    )
-
-
-    model_with_tools = model.bind_tools(
-        tools
-    )
-
-
-    # ========================================================
-    # Initial messages
-    # ========================================================
-
-    messages = [
-        SystemMessage(
-            content="""
-You are Memory Vault's tool-calling assistant.
-
-You have access to four tools:
-
-1. search_memories
-   Search the user's saved memories.
-
-2. get_memory
-   Retrieve a specific saved memory.
-
-3. calculate
-   Perform arithmetic calculations.
-
-4. search_web
-   Search the internet for current or external information.
-
-Rules:
-
-- Use search_memories when information may exist
-  in the user's saved memories.
-- Use get_memory when you need detailed information
-  about a specific memory.
-- Use calculate when arithmetic is required.
-- Use search_web only when outside/current information
-  is needed or the user explicitly asks for web information.
-- Do not invent memory information.
-- Do not claim that a tool returned information
-  that it did not return.
-- After receiving tool results, answer the user directly.
-""",
-        ),
-        HumanMessage(
-            content=question
-        ),
-    ]
-
-
-    tool_trace = []
-
-
-    # ========================================================
-    # Tool-calling loop
-    # ========================================================
-
-    for _ in range(
-        max_iterations
-    ):
-
-        response = model_with_tools.invoke(
-            messages
-        )
-
-
-        messages.append(
-            response
-        )
-
-
-        # ====================================================
-        # No tool call → final answer
-        # ====================================================
-
-        if not response.tool_calls:
-
-            return {
-                "answer": response.content,
-                "tool_calls": tool_trace,
-            }
-
-
-        # ====================================================
-        # Execute tool calls
-        # ====================================================
-
-        for tool_call in response.tool_calls:
-
-            tool_name = tool_call["name"]
-
-            tool_args = tool_call["args"]
-
-
-            tool_trace.append(
-                {
-                    "tool": tool_name,
-                    "arguments": tool_args,
-                }
-            )
-
-
-            selected_tool = tool_map.get(
-                tool_name
-            )
-
-
-            if selected_tool is None:
-
-                raise ValueError(
-                    f"Unknown tool requested: "
-                    f"{tool_name}"
-                )
-
-
-            tool_result = selected_tool.invoke(
-                tool_call
-            )
-
-
-            messages.append(
-                tool_result
-            )
-
-
-    raise RuntimeError(
-        "Tool-calling loop exceeded the maximum "
-        "number of iterations."
-    )
