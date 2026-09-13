@@ -723,7 +723,7 @@ def render_memory_grid(
         else:
 
             st.info(
-                f"No {tab_name.lower()} memories found."
+                f"No {tab_name.lower()} memories found, Please add memories or load demo memories by opening sidebar (Click Top left >> button)"
             )
 
         return
