@@ -49,47 +49,6 @@ def initialize_database():
     )
 
 
-    # =========================================
-    # Check existing columns
-    # =========================================
-
-    cursor.execute(
-        "PRAGMA table_info(memories)"
-    )
-
-    columns = [
-        row["name"]
-        for row in cursor.fetchall()
-    ]
-
-
-    # =========================================
-    # Phase 2 migration
-    # =========================================
-
-    if "extracted_text" not in columns:
-
-        cursor.execute(
-            """
-            ALTER TABLE memories
-            ADD COLUMN extracted_text TEXT
-            """
-        )
-
-
-    # =========================================
-    # Phase 3 migration
-    # =========================================
-
-    if "summary" not in columns:
-
-        cursor.execute(
-            """
-            ALTER TABLE memories
-            ADD COLUMN summary TEXT
-            """
-        )
-
 
     connection.commit()
 
