@@ -318,17 +318,11 @@ if st.session_state.get(
         "and indexed."
     )
 
-    if st.button(
-        "Go to Homepage",
-        type="primary",
-        key="go_home_after_upload",
-    ):
+    # Clear the success state so the message does not
+    # appear again when the Add Memory page is reopened.
+    st.session_state.memory_added = False
 
-        st.session_state.memory_added = False
-
-        st.switch_page(
-            "app.py"
-        )
+    
 
 
 # ============================================================
