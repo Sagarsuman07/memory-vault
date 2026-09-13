@@ -93,18 +93,15 @@ def validate_thread_id(
             "User ID cannot be empty."
         )
 
-
     if not thread_id or not thread_id.strip():
 
         raise ValueError(
             "Thread ID cannot be empty."
         )
 
-
     expected_prefix = (
         f"{user_id}:"
     )
-
 
     if not thread_id.startswith(
         expected_prefix
@@ -131,13 +128,14 @@ def build_agent_graph(
             "User ID cannot be empty."
         )
 
-
-    if memory_id is not None and not memory_id.strip():
+    if (
+        memory_id is not None
+        and not memory_id.strip()
+    ):
 
         raise ValueError(
             "Memory ID cannot be empty."
         )
-
 
     # ========================================================
     # Create tools for current user + current scope
@@ -148,7 +146,6 @@ def build_agent_graph(
         memory_id=memory_id,
     )
 
-
     # ========================================================
     # Create Tool Node
     # ========================================================
@@ -157,7 +154,6 @@ def build_agent_graph(
         tools
     )
 
-
     # ========================================================
     # Create State Graph
     # ========================================================
@@ -165,7 +161,6 @@ def build_agent_graph(
     graph_builder = StateGraph(
         AgentState
     )
-
 
     # ========================================================
     # Add Nodes
@@ -176,24 +171,20 @@ def build_agent_graph(
         understand_query,
     )
 
-
     graph_builder.add_node(
         "agent",
         agent_node,
     )
-
 
     graph_builder.add_node(
         "tools",
         tool_node,
     )
 
-
     graph_builder.add_node(
         "answer",
         answer_node,
     )
-
 
     # ========================================================
     # START → Understand Query
@@ -204,7 +195,6 @@ def build_agent_graph(
         "understand_query",
     )
 
-
     # ========================================================
     # Understand Query → Agent
     # ========================================================
@@ -213,7 +203,6 @@ def build_agent_graph(
         "understand_query",
         "agent",
     )
-
 
     # ========================================================
     # Agent → Tool or Answer
@@ -228,7 +217,6 @@ def build_agent_graph(
         },
     )
 
-
     # ========================================================
     # Tool → Agent
     # ========================================================
@@ -238,7 +226,6 @@ def build_agent_graph(
         "agent",
     )
 
-
     # ========================================================
     # Answer → END
     # ========================================================
@@ -247,7 +234,6 @@ def build_agent_graph(
         "answer",
         END,
     )
-
 
     # ========================================================
     # Compile with Checkpointer
@@ -275,20 +261,20 @@ def run_langgraph_agent(
             "Question cannot be empty."
         )
 
-
     if not user_id or not user_id.strip():
 
         raise ValueError(
             "User ID cannot be empty."
         )
 
-
-    if memory_id is not None and not memory_id.strip():
+    if (
+        memory_id is not None
+        and not memory_id.strip()
+    ):
 
         raise ValueError(
             "Memory ID cannot be empty."
         )
-
 
     # ========================================================
     # Validate thread ownership
@@ -299,7 +285,6 @@ def run_langgraph_agent(
         thread_id=thread_id,
     )
 
-
     # ========================================================
     # Build graph
     # ========================================================
@@ -309,12 +294,11 @@ def run_langgraph_agent(
         memory_id=memory_id,
     )
 
-
     # ========================================================
     # New message
     #
-    # The checkpointer restores previous messages
-    # belonging to this thread.
+    # The checkpointer automatically restores the previous
+    # messages belonging to this thread.
     # ========================================================
 
     input_state = {
@@ -343,7 +327,6 @@ def run_langgraph_agent(
         "tool_calls": [],
     }
 
-
     # ========================================================
     # Thread configuration
     # ========================================================
@@ -354,7 +337,6 @@ def run_langgraph_agent(
         }
     }
 
-
     # ========================================================
     # Execute graph
     # ========================================================
@@ -363,7 +345,6 @@ def run_langgraph_agent(
         input_state,
         config,
     )
-
 
     # ========================================================
     # Return result
@@ -412,11 +393,9 @@ def get_thread_state(
         thread_id=thread_id,
     )
 
-
     graph = build_agent_graph(
         user_id=user_id
     )
-
 
     config = {
         "configurable": {
@@ -424,7 +403,206 @@ def get_thread_state(
         }
     }
 
-
     return graph.get_state(
         config
     )
+
+
+# ============================================================
+# Get Conversation History
+# ============================================================
+
+def get_conversation_history(
+    user_id: str,
+):
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+    user_prefix = (
+        f"{user_id}:"
+    )
+
+    conversations = []
+
+    # ========================================================
+    # Read saved checkpoints
+    #
+    # Each conversation has its own thread_id.
+    # ========================================================
+
+    try:
+
+        checkpoint_items = list(
+            _checkpointer.list(
+                None,
+                limit=1000,
+            )
+        )
+
+    except Exception as error:
+
+        raise RuntimeError(
+            "Unable to load conversation history."
+        ) from error
+
+    # ========================================================
+    # Keep unique thread IDs
+    # ========================================================
+
+    thread_ids = []
+
+    for item in checkpoint_items:
+
+        try:
+
+            config = item.config
+
+            configurable = (
+                config.get(
+                    "configurable",
+                    {}
+                )
+            )
+
+            thread_id = (
+                configurable.get(
+                    "thread_id"
+                )
+            )
+
+        except Exception:
+
+            continue
+
+        if not thread_id:
+            continue
+
+        # ====================================================
+        # Security:
+        # Only current user's conversations.
+        # ====================================================
+
+        if not thread_id.startswith(
+            user_prefix
+        ):
+            continue
+
+        if thread_id not in thread_ids:
+
+            thread_ids.append(
+                thread_id
+            )
+
+    # ========================================================
+    # Read state for every conversation
+    # ========================================================
+
+    for thread_id in thread_ids:
+
+        try:
+
+            thread_state = get_thread_state(
+                user_id=user_id,
+                thread_id=thread_id,
+            )
+
+            values = (
+                thread_state.values
+                if thread_state is not None
+                else {}
+            )
+
+            messages = values.get(
+                "messages",
+                [],
+            )
+
+            if not messages:
+                continue
+
+            # =================================================
+            # Find first human/user question
+            # =================================================
+
+            first_question = None
+
+            for message in messages:
+
+                message_type = getattr(
+                    message,
+                    "type",
+                    "",
+                )
+
+                if message_type != "human":
+                    continue
+
+                content = getattr(
+                    message,
+                    "content",
+                    "",
+                )
+
+                if isinstance(
+                    content,
+                    str,
+                ):
+
+                    content = content.strip()
+
+                else:
+
+                    content = str(
+                        content
+                    ).strip()
+
+                if content:
+
+                    first_question = content
+                    break
+
+            # =================================================
+            # Ignore threads that don't contain a question.
+            # =================================================
+
+            if not first_question:
+                continue
+
+            scope = values.get(
+                "scope",
+                "all",
+            )
+
+            memory_id = values.get(
+                "memory_id"
+            )
+
+            conversations.append(
+                {
+                    "thread_id": thread_id,
+                    "title": first_question,
+                    "scope": scope,
+                    "memory_id": memory_id,
+                    "message_count": len(
+                        messages
+                    ),
+                }
+            )
+
+        except Exception:
+
+            # One corrupted/unreadable thread should not
+            # prevent the remaining history from loading.
+            continue
+
+    # ========================================================
+    # Newest conversations first
+    # ========================================================
+
+    conversations.reverse()
+
+    return conversations
