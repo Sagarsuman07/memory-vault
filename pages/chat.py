@@ -2,6 +2,7 @@ import streamlit as st
 
 from agent.graph import (
     create_thread_id,
+    get_conversation_history,
     get_thread_state,
     run_langgraph_agent,
 )
@@ -31,7 +32,9 @@ st.set_page_config(
     layout="wide",
 )
 
+
 initialize_database()
+
 
 USER_ID = settings.DEMO_USER_ID
 
@@ -42,8 +45,12 @@ USER_ID = settings.DEMO_USER_ID
 
 # Engineering/UI signal only.
 # These are not probabilities.
+
 HIGH_RETRIEVAL_DISTANCE = 0.4
-MEDIUM_RETRIEVAL_DISTANCE = DEFAULT_DISTANCE_THRESHOLD
+
+MEDIUM_RETRIEVAL_DISTANCE = (
+    DEFAULT_DISTANCE_THRESHOLD
+)
 
 NOT_FOUND_MESSAGE = (
     "This information wasn't found in your memory."
@@ -64,6 +71,10 @@ def normalize_scope(
     return "all"
 
 
+# ============================================================
+# Retrieval Confidence
+# ============================================================
+
 def get_retrieval_signal(
     question: str,
     memory_id: str | None,
@@ -80,7 +91,6 @@ def get_retrieval_signal(
         results
     )
 
-
     if not grounded_results:
 
         return {
@@ -89,13 +99,14 @@ def get_retrieval_signal(
             "sources": [],
         }
 
-
+    # ========================================================
     # Strongest relevant match = lowest distance.
+    # ========================================================
+
     strongest_distance = min(
         distance
         for _, distance in grounded_results
     )
-
 
     if (
         strongest_distance
@@ -121,6 +132,9 @@ def get_retrieval_signal(
             "Low retrieval confidence"
         )
 
+    # ========================================================
+    # Build source information
+    # ========================================================
 
     sources = []
 
@@ -130,7 +144,6 @@ def get_retrieval_signal(
             USER_ID
         )
     }
-
 
     for document, distance in grounded_results:
 
@@ -143,7 +156,6 @@ def get_retrieval_signal(
         source_memory = memory_map.get(
             source_memory_id
         )
-
 
         sources.append(
             {
@@ -171,13 +183,16 @@ def get_retrieval_signal(
             }
         )
 
-
     return {
         "grounded": True,
         "confidence": confidence,
         "sources": sources,
     }
 
+
+# ============================================================
+# Message Helpers
+# ============================================================
 
 def get_message_type(
     message,
@@ -207,7 +222,9 @@ def get_message_content(
 
         return content
 
-    return str(content)
+    return str(
+        content
+    )
 
 
 def get_previous_human_question(
@@ -235,6 +252,10 @@ def get_previous_human_question(
     return None
 
 
+# ============================================================
+# Cache Key
+# ============================================================
+
 def get_cache_key(
     thread_id: str,
     question: str,
@@ -253,6 +274,10 @@ def get_cache_key(
     )
 
 
+# ============================================================
+# Navigation
+# ============================================================
+
 def go_to_dashboard():
 
     st.query_params.clear()
@@ -260,6 +285,180 @@ def go_to_dashboard():
     st.switch_page(
         "app.py"
     )
+
+
+def switch_to_new_conversation():
+    """
+    Shared logic for starting a new thread while
+    preserving the current chat scope.
+    """
+
+    new_thread_id = create_thread_id(
+        USER_ID
+    )
+
+    current_scope = (
+        st.session_state.chat_scope
+    )
+
+    current_memory_id = (
+        st.session_state.chat_memory_id
+    )
+
+    st.session_state.chat_thread_id = (
+        new_thread_id
+    )
+
+    st.session_state.chat_retrieval_cache = {}
+
+    st.query_params["thread_id"] = (
+        new_thread_id
+    )
+
+    if current_scope == "memory":
+
+        st.query_params["scope"] = (
+            "memory"
+        )
+
+        if current_memory_id:
+
+            st.query_params["memory_id"] = (
+                current_memory_id
+            )
+
+    else:
+
+        st.query_params["scope"] = (
+            "all"
+        )
+
+        if "memory_id" in st.query_params:
+
+            del st.query_params[
+                "memory_id"
+            ]
+
+    st.rerun()
+
+
+def open_conversation(
+    conversation,
+):
+    """
+    Switch to an existing conversation and
+    restore its saved scope.
+    """
+
+    conversation_thread_id = (
+        conversation["thread_id"]
+    )
+
+    st.session_state.chat_thread_id = (
+        conversation_thread_id
+    )
+
+    st.session_state.chat_retrieval_cache = {}
+
+    conversation_scope = (
+        conversation.get(
+            "scope",
+            "all",
+        )
+    )
+
+    conversation_memory_id = (
+        conversation.get(
+            "memory_id"
+        )
+    )
+
+    # --------------------------------------------------------
+    # Restore scope.
+    # --------------------------------------------------------
+
+    if (
+        conversation_scope
+        == "memory"
+        and
+        conversation_memory_id
+    ):
+
+        memory = get_memory_by_id(
+            memory_id=(
+                conversation_memory_id
+            ),
+            user_id=USER_ID,
+        )
+
+        if memory is not None:
+
+            st.session_state.chat_scope = (
+                "memory"
+            )
+
+            st.session_state.chat_memory_id = (
+                conversation_memory_id
+            )
+
+            st.query_params["scope"] = (
+                "memory"
+            )
+
+            st.query_params["memory_id"] = (
+                conversation_memory_id
+            )
+
+        else:
+
+            # ------------------------------------------------
+            # Selected memory was deleted.
+            # Fall back to global scope.
+            # ------------------------------------------------
+
+            st.session_state.chat_scope = (
+                "all"
+            )
+
+            st.session_state.chat_memory_id = (
+                None
+            )
+
+            st.query_params["scope"] = (
+                "all"
+            )
+
+            if "memory_id" in st.query_params:
+
+                del st.query_params[
+                    "memory_id"
+                ]
+
+    else:
+
+        st.session_state.chat_scope = (
+            "all"
+        )
+
+        st.session_state.chat_memory_id = (
+            None
+        )
+
+        st.query_params["scope"] = (
+            "all"
+        )
+
+        if "memory_id" in st.query_params:
+
+            del st.query_params[
+                "memory_id"
+            ]
+
+    st.query_params["thread_id"] = (
+        conversation_thread_id
+    )
+
+    st.rerun()
 
 
 # ============================================================
@@ -296,12 +495,17 @@ query_scope = normalize_scope(
     )
 )
 
+
 query_memory_id = (
     st.query_params.get(
         "memory_id"
     )
 )
 
+
+# ============================================================
+# Validate Initial Memory Scope
+# ============================================================
 
 if query_scope == "memory":
 
@@ -320,12 +524,10 @@ if query_scope == "memory":
 
         st.stop()
 
-
     selected_memory = get_memory_by_id(
         memory_id=query_memory_id,
         user_id=USER_ID,
     )
-
 
     if selected_memory is None:
 
@@ -351,10 +553,6 @@ else:
 # ============================================================
 # Session State
 # ============================================================
-
-# A new thread represents a new chat session.
-# Therefore its initial scope comes from the navigation
-# parameters rather than an old chat's scope.
 
 if (
     "chat_thread_id"
@@ -391,6 +589,10 @@ if "chat_memory_id" not in st.session_state:
     )
 
 
+# ============================================================
+# Validate Current Session Memory
+# ============================================================
+
 if (
     st.session_state.chat_scope
     == "memory"
@@ -406,7 +608,6 @@ if (
         user_id=USER_ID,
     )
 
-
     if scope_memory is None:
 
         st.session_state.chat_scope = (
@@ -417,6 +618,10 @@ if (
             None
         )
 
+
+# ============================================================
+# Retrieval Cache
+# ============================================================
 
 if (
     "chat_retrieval_cache"
@@ -430,31 +635,239 @@ if (
 # Header
 # ============================================================
 
-header_col1, header_col2 = st.columns(
-    [5, 1]
+if st.button(
+    "← Back to Dashboard",
+    key="chat_back_dashboard",
+):
+
+    go_to_dashboard()
+
+
+st.title(
+    "🧠 Memory Vault Chat"
+)
+
+st.caption(
+    "Conversational questions over your saved memories."
 )
 
 
-with header_col1:
+# ============================================================
+# New Conversation + Chat History
+# ============================================================
 
-    st.title(
-        "🧠 Memory Vault Chat"
-    )
-
-    st.caption(
-        "Conversational questions over your saved memories."
-    )
+st.divider()
 
 
-with header_col2:
+button_col1, button_col2 = st.columns(
+    [1, 1]
+)
+
+
+# ============================================================
+# New Conversation Button
+# ============================================================
+
+with button_col1:
 
     if st.button(
-        "← Dashboard",
+        "＋ New Conversation",
         use_container_width=True,
-        key="chat_back_dashboard",
+        key="chat_new_conversation",
     ):
 
-        go_to_dashboard()
+        switch_to_new_conversation()
+
+
+# ============================================================
+# Chat History
+# ============================================================
+
+with button_col2:
+
+    with st.popover(
+        "💬 Chat History",
+        use_container_width=True,
+    ):
+
+        st.caption(
+            "Your saved conversations"
+        )
+
+        st.divider()
+
+        # ----------------------------------------------------
+        # Load conversation history.
+        #
+        # IMPORTANT:
+        # We explicitly reverse the returned list here.
+        # This guarantees that the newest conversation is
+        # rendered first and the oldest conversation last.
+        # ----------------------------------------------------
+
+        try:
+
+            conversations = list(
+                get_conversation_history(
+                    USER_ID
+                )
+            )
+
+            conversations = list(
+                reversed(
+                    conversations
+                )
+            )
+
+        except Exception:
+
+            conversations = []
+
+            st.warning(
+                "Conversation history could not be loaded."
+            )
+
+        # ----------------------------------------------------
+        # No conversations
+        # ----------------------------------------------------
+
+        if not conversations:
+
+            st.caption(
+                "No previous conversations yet."
+            )
+
+        else:
+
+            current_thread_id = (
+                st.session_state.chat_thread_id
+            )
+
+            # ------------------------------------------------
+            # Left-align history titles.
+            #
+            # Streamlit renders st.button() using an internal
+            # flex container. Target the actual popover body
+            # and all nested button elements so the title is
+            # aligned from the left edge.
+            #
+            # This affects ONLY buttons inside Chat History.
+            # ------------------------------------------------
+
+            st.markdown(
+                """
+                <style>
+
+                /* Chat History: left-align the complete button */
+                [data-testid="stPopoverBody"] button {
+                    justify-content: flex-start !important;
+                    text-align: left !important;
+                }
+
+                /* Chat History: make the button's inner wrapper
+                   use the full available width */
+                [data-testid="stPopoverBody"] button > div {
+                    width: 100% !important;
+                    justify-content: flex-start !important;
+                    text-align: left !important;
+                }
+
+                /* Chat History: align Streamlit's markdown
+                   container to the left */
+                [data-testid="stPopoverBody"] button
+                div[data-testid="stMarkdownContainer"] {
+                    width: 100% !important;
+                    flex: 1 1 auto !important;
+                    justify-content: flex-start !important;
+                    text-align: left !important;
+                }
+
+                /* Chat History: align the actual title text */
+                [data-testid="stPopoverBody"] button
+                div[data-testid="stMarkdownContainer"] p {
+                    width: 100% !important;
+                    margin: 0 !important;
+                    text-align: left !important;
+                }
+
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ------------------------------------------------
+            # Render newest → oldest
+            # ------------------------------------------------
+
+            for conversation in conversations:
+
+                conversation_thread_id = (
+                    conversation["thread_id"]
+                )
+
+                title = (
+                    conversation.get(
+                        "title",
+                        "New Conversation",
+                    )
+                )
+
+                # ------------------------------------------------
+                # Compact title
+                # ------------------------------------------------
+
+                if len(title) > 42:
+
+                    display_title = (
+                        title[:42]
+                        + "..."
+                    )
+
+                else:
+
+                    display_title = title
+
+                # ------------------------------------------------
+                # Current conversation marker
+                # ------------------------------------------------
+
+                if (
+                    conversation_thread_id
+                    == current_thread_id
+                ):
+
+                    prefix = "●"
+
+                else:
+
+                    prefix = "○"
+
+                button_label = (
+                    f"{prefix} {display_title}"
+                )
+
+                # ------------------------------------------------
+                # History button
+                #
+                # The key starts with "history_" so the CSS
+                # selector above can target only these buttons.
+                # ------------------------------------------------
+
+                if st.button(
+                    button_label,
+                    use_container_width=True,
+                    key=(
+                        "history_"
+                        + conversation_thread_id
+                    ),
+                ):
+
+                    open_conversation(
+                        conversation
+                    )
+
+
+st.divider()
 
 
 # ============================================================
@@ -511,7 +924,6 @@ if new_scope == "memory":
         USER_ID
     )
 
-
     if not memories:
 
         st.info(
@@ -526,20 +938,16 @@ if new_scope == "memory":
             for memory in memories
         }
 
-
         current_memory_id = (
             st.session_state
             .chat_memory_id
         )
 
-
         option_titles = list(
             memory_options.keys()
         )
 
-
         default_index = 0
-
 
         for index, title in enumerate(
             option_titles
@@ -551,8 +959,8 @@ if new_scope == "memory":
             ):
 
                 default_index = index
-                break
 
+                break
 
         selected_title = st.selectbox(
             "Select memory",
@@ -561,13 +969,11 @@ if new_scope == "memory":
             key="chat_memory_selector",
         )
 
-
         selected_memory_id = (
             memory_options[
                 selected_title
             ]
         )
-
 
         st.session_state.chat_scope = (
             "memory"
@@ -577,7 +983,6 @@ if new_scope == "memory":
             selected_memory_id
         )
 
-
         st.query_params["scope"] = (
             "memory"
         )
@@ -585,7 +990,6 @@ if new_scope == "memory":
         st.query_params["memory_id"] = (
             selected_memory_id
         )
-
 
 else:
 
@@ -597,11 +1001,9 @@ else:
         None
     )
 
-
     st.query_params["scope"] = (
         "all"
     )
-
 
     if "memory_id" in st.query_params:
 
@@ -626,7 +1028,6 @@ if (
         ),
         user_id=USER_ID,
     )
-
 
     if scope_memory is not None:
 
@@ -656,14 +1057,12 @@ try:
         thread_id=thread_id,
     )
 
-
     conversation_messages = (
         thread_state.values.get(
             "messages",
             [],
         )
     )
-
 
 except Exception as error:
 
@@ -676,7 +1075,7 @@ except Exception as error:
 
 
 # ============================================================
-# Conversation History
+# Conversation Messages
 # ============================================================
 
 for index, message in enumerate(
@@ -689,6 +1088,9 @@ for index, message in enumerate(
         )
     )
 
+    # ========================================================
+    # User Message
+    # ========================================================
 
     if message_type == "human":
 
@@ -702,6 +1104,9 @@ for index, message in enumerate(
                 )
             )
 
+    # ========================================================
+    # Assistant Message
+    # ========================================================
 
     elif message_type == "ai":
 
@@ -709,13 +1114,14 @@ for index, message in enumerate(
             message
         )
 
+        # ----------------------------------------------------
+        # Tool-calling AI messages can have no user-facing
+        # content.
+        # ----------------------------------------------------
 
-        # Tool-calling AI messages can have
-        # no user-facing content.
         if not content.strip():
 
             continue
-
 
         with st.chat_message(
             "assistant"
@@ -725,6 +1131,9 @@ for index, message in enumerate(
                 content
             )
 
+            # =================================================
+            # Find the question associated with this answer.
+            # =================================================
 
             question = (
                 get_previous_human_question(
@@ -732,7 +1141,6 @@ for index, message in enumerate(
                     index,
                 )
             )
-
 
             if question:
 
@@ -747,6 +1155,9 @@ for index, message in enumerate(
                     )
                 )
 
+                # =================================================
+                # Retrieve confidence only once per question.
+                # =================================================
 
                 if cache_key not in (
                     st.session_state
@@ -776,11 +1187,14 @@ for index, message in enumerate(
                         ][
                             cache_key
                         ] = {
+
                             "grounded": False,
-                            "confidence": "Not found",
+
+                            "confidence":
+                                "Not found",
+
                             "sources": [],
                         }
-
 
                 signal = (
                     st.session_state
@@ -789,6 +1203,9 @@ for index, message in enumerate(
                     ]
                 )
 
+                # =================================================
+                # Grounded answer
+                # =================================================
 
                 if signal["grounded"]:
 
@@ -797,6 +1214,9 @@ for index, message in enumerate(
                         f"{signal['confidence']}"
                     )
 
+                    # ---------------------------------------------
+                    # Sources
+                    # ---------------------------------------------
 
                     if signal["sources"]:
 
@@ -818,6 +1238,10 @@ for index, message in enumerate(
                                     )
                                 )
 
+                # =================================================
+                # Not found
+                # =================================================
+
                 else:
 
                     if (
@@ -828,34 +1252,6 @@ for index, message in enumerate(
                         st.caption(
                             "Not found"
                         )
-
-
-# ============================================================
-# New Conversation
-# ============================================================
-
-st.divider()
-
-
-if st.button(
-    "New Conversation",
-    key="chat_new_conversation",
-):
-
-    new_thread_id = create_thread_id(
-        USER_ID
-    )
-
-
-    st.session_state.chat_retrieval_cache = {}
-
-
-    st.query_params["thread_id"] = (
-        new_thread_id
-    )
-
-
-    st.rerun()
 
 
 # ============================================================
@@ -870,7 +1266,6 @@ question = st.chat_input(
 if question:
 
     question = question.strip()
-
 
     if not question:
 
@@ -897,6 +1292,9 @@ if question:
                     ),
                 )
 
+            # =================================================
+            # Calculate retrieval confidence for this question.
+            # =================================================
 
             cache_key = get_cache_key(
                 thread_id,
@@ -906,7 +1304,6 @@ if question:
                     .chat_memory_id
                 ),
             )
-
 
             try:
 
@@ -929,14 +1326,20 @@ if question:
                 ][
                     cache_key
                 ] = {
+
                     "grounded": False,
-                    "confidence": "Not found",
+
+                    "confidence":
+                        "Not found",
+
                     "sources": [],
                 }
 
+            # =================================================
+            # Rerun so the newly persisted messages appear.
+            # =================================================
 
             st.rerun()
-
 
         except Exception as error:
 
