@@ -5,6 +5,7 @@ from agent.graph import (
     get_conversation_history,
     get_thread_state,
     run_langgraph_agent,
+    _checkpointer,
 )
 
 from config.settings import settings
@@ -340,6 +341,31 @@ def switch_to_new_conversation():
             ]
 
     st.rerun()
+
+
+def delete_conversation(thread_id: str):
+    """
+    Delete one persisted LangGraph conversation.
+
+    The thread ID is validated before deletion so a chat page
+    cannot delete a thread belonging to another user.
+    """
+
+    if not thread_id or not thread_id.strip():
+        raise ValueError(
+            "Thread ID is required."
+        )
+
+    user_prefix = f"{USER_ID}:"
+
+    if not thread_id.startswith(user_prefix):
+        raise ValueError(
+            "You are not allowed to delete this conversation."
+        )
+
+    _checkpointer.delete_thread(
+        thread_id
+    )
 
 
 def open_conversation(
@@ -790,6 +816,43 @@ with button_col2:
                     text-align: left !important;
                 }
 
+                /* Small delete icon button */
+                [data-testid="stPopoverBody"]
+                div[class*="st-key-delete_history_"] button {
+                    width: 2.2rem !important;
+                    min-width: 2.2rem !important;
+                    max-width: 2.2rem !important;
+                    height: 2.2rem !important;
+                    min-height: 2.2rem !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                }
+
+                [data-testid="stPopoverBody"]
+                div[class*="st-key-delete_history_"] button > div {
+                    width: 100% !important;
+                    justify-content: center !important;
+                    text-align: center !important;
+                    padding: 0 !important;
+                }
+
+                [data-testid="stPopoverBody"]
+                div[class*="st-key-delete_history_"]
+                div[data-testid="stMarkdownContainer"] {
+                    width: 100% !important;
+                    flex: 0 0 auto !important;
+                    justify-content: center !important;
+                    text-align: center !important;
+                }
+
+                [data-testid="stPopoverBody"]
+                div[class*="st-key-delete_history_"]
+                div[data-testid="stMarkdownContainer"] p {
+                    width: 100% !important;
+                    margin: 0 !important;
+                    text-align: center !important;
+                }
+
                 </style>
                 """,
                 unsafe_allow_html=True,
@@ -847,24 +910,80 @@ with button_col2:
                 )
 
                 # ------------------------------------------------
-                # History button
-                #
-                # The key starts with "history_" so the CSS
-                # selector above can target only these buttons.
+                # History item: title + small delete icon
                 # ------------------------------------------------
 
-                if st.button(
-                    button_label,
-                    use_container_width=True,
-                    key=(
-                        "history_"
-                        + conversation_thread_id
-                    ),
-                ):
+                history_col, delete_col = st.columns(
+                    [0.86, 0.14]
+                )
 
-                    open_conversation(
-                        conversation
-                    )
+                with history_col:
+
+                    if st.button(
+                        button_label,
+                        use_container_width=True,
+                        key=(
+                            "history_"
+                            + conversation_thread_id
+                        ),
+                    ):
+
+                        open_conversation(
+                            conversation
+                        )
+
+                with delete_col:
+
+                    if st.button(
+                        "🗑️",
+                        help="Delete conversation",
+                        key=(
+                            "delete_history_"
+                            + conversation_thread_id
+                        ),
+                    ):
+
+                        try:
+
+                            delete_conversation(
+                                conversation_thread_id
+                            )
+
+                            # If the deleted conversation is the
+                            # current one, immediately create a fresh
+                            # thread so the chat page remains usable.
+                            if (
+                                conversation_thread_id
+                                == current_thread_id
+                            ):
+
+                                new_thread_id = create_thread_id(
+                                    USER_ID
+                                )
+
+                                st.session_state.chat_thread_id = (
+                                    new_thread_id
+                                )
+
+                                st.session_state.chat_retrieval_cache = {}
+
+                                st.query_params["thread_id"] = (
+                                    new_thread_id
+                                )
+
+                            st.toast(
+                                "Conversation deleted.",
+                                icon="🗑️",
+                            )
+
+                            st.rerun()
+
+                        except Exception as error:
+
+                            st.error(
+                                "Could not delete the conversation. "
+                                f"{error}"
+                            )
 
 
 st.divider()
