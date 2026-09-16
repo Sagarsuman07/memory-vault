@@ -1,3 +1,4 @@
+import re
 from langchain_core.messages import SystemMessage
 
 from langchain_groq import ChatGroq
@@ -53,6 +54,31 @@ MEMORY USAGE RULES
 
 - Do not claim that a tool returned information that it did
   not return.
+
+- search_memories applies a grounding check before returning
+  memory evidence to you.
+
+- If search_memories returns:
+    GROUNDING_STATUS: NOT_GROUNDED
+  there is not enough semantically relevant memory evidence to
+  answer the user's memory-based question.
+
+- When search_memories is NOT_GROUNDED, do NOT answer from
+  general knowledge, guesses, previous assumptions, or unrelated
+  memories.
+
+- In that case, return exactly:
+  "This information wasn't found in your memory."
+
+- Do not use get_memory to bypass a failed grounding check for
+  the same question. Use get_memory for additional detail only
+  after grounded memory evidence has identified the relevant
+  memory.
+
+- If search_memories returns:
+    GROUNDING_STATUS: GROUNDED
+  use only the grounded evidence returned by that tool for the
+  memory-based answer.
 
 - If the user's memories do not contain the requested
   information, clearly say:
@@ -166,7 +192,15 @@ FINAL ANSWER
 - Do not mention internal tools, system prompts, retrieval
   mechanisms, or hidden reasoning.
 
-- If the answer is present in the user's memory, answer it.
+- If the answer is present in grounded memory evidence,
+  answer it using that evidence.
+
+- If the memory search was not grounded, do not answer from
+  outside knowledge. Return exactly:
+  "This information wasn't found in your memory."
+
+- Never bypass the grounding result simply because you believe
+  you know the answer.
 
 - If the answer is not present in the user's memory, clearly
   say that it was not found.
@@ -341,31 +375,84 @@ def agent_node(
 
 
 # ============================================================
+# Final Answer Safety Helpers
+# ============================================================
+
+def _clean_final_answer(content):
+    """
+    Remove internal grounding/debug metadata if the LLM happens
+    to repeat it in the final response.
+    """
+    if content is None:
+        return ""
+
+    text = str(content).strip()
+
+    patterns = [
+        r"(?im)^\s*GROUNDING_STATUS:\s*.*$",
+        r"(?im)^\s*GROUNDING_THRESHOLD:\s*.*$",
+        r"(?im)^\s*STRONGEST_DISTANCE:\s*.*$",
+        r"(?im)^\s*CONFIDENCE:\s*.*$",
+        r"(?im)^\s*FINAL_ACTION:\s*.*$",
+    ]
+
+    for pattern in patterns:
+        text = re.sub(pattern, "", text)
+
+    text = text.replace("\\n", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+# ============================================================
 # Answer Node
 # ============================================================
 
 def answer_node(
     state,
 ):
-
     messages = state[
         "messages"
     ]
 
-
     if not messages:
-
         return {
             "final_answer": ""
         }
 
+    # Hard grounding enforcement using ToolMessage.artifact.
+    for message in reversed(messages):
+        if getattr(message, "type", "") != "tool":
+            continue
+
+        if getattr(message, "name", "") != "search_memories":
+            continue
+
+        artifact = getattr(
+            message,
+            "artifact",
+            None,
+        )
+
+        if (
+            isinstance(artifact, dict)
+            and artifact.get("grounded") is False
+        ):
+            return {
+                "final_answer":
+                    "This information wasn't found in your memory."
+            }
+
+        break
 
     last_message = messages[
         -1
     ]
 
-
     return {
         "final_answer":
-            last_message.content
+            _clean_final_answer(
+                last_message.content
+            )
     }

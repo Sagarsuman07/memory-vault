@@ -24,7 +24,7 @@ from ingestion.pipeline import (
     get_memory_type,
 )
 
-from prompts.qa import QA_PROMPT
+
 from prompts.summary import SUMMARY_PROMPT
 from prompts.safety import SAFETY_PROMPT
 
@@ -35,11 +35,7 @@ from rag.vector_store import (
     get_vector_store,
 )
 
-from rag.retriever import retrieve
 
-from rag.grounding import (
-    get_grounded_results,
-)
 
 
 UPLOAD_DIR = Path(
@@ -1112,65 +1108,6 @@ def load_demo_memories(
     return created
 
 
-# ============================================================
-# Re-index Existing Memory
-# ============================================================
-
-def index_existing_memory(
-    memory_id: str,
-    user_id: str,
-):
-    memory = get_memory_by_id(
-        memory_id,
-        user_id,
-    )
-
-    extracted_text = memory[
-        "extracted_text"
-    ]
-
-    if (
-        not extracted_text
-        or not extracted_text.strip()
-    ):
-        raise ValueError(
-            "Memory has no extracted content."
-        )
-
-    chunks = split_text(
-        extracted_text
-    )
-
-    if not chunks:
-        raise ValueError(
-            "No chunks could be created."
-        )
-
-    return index_memory(
-        memory_id=memory["id"],
-        user_id=memory["user_id"],
-        memory_type=memory["memory_type"],
-        chunks=chunks,
-    )
-
-
-# ============================================================
-# QA Model
-# ============================================================
-
-def get_qa_model():
-
-    if not settings.GROQ_API_KEY:
-        raise ValueError(
-            "GROQ_API_KEY is not configured."
-        )
-
-    return ChatGroq(
-        model=settings.GROQ_LLM_MODEL,
-        temperature=0,
-        api_key=settings.GROQ_API_KEY,
-    )
-
 
 # ============================================================
 # Summary Model
@@ -1371,138 +1308,3 @@ def generate_memory_summary(
     )
 
 
-# ============================================================
-# Build Context
-# ============================================================
-
-def build_context(
-    grounded_results,
-):
-
-    context_parts = []
-
-    for rank, (
-        document,
-        distance,
-    ) in enumerate(
-        grounded_results,
-        start=1,
-    ):
-
-        context_parts.append(
-            f"""
-Source {rank}
-Memory ID: {document.metadata['memory_id']}
-Memory Type: {document.metadata['memory_type']}
-Chunk: {document.metadata['chunk_index']}
-
-Content:
-{document.page_content}
-"""
-        )
-
-    return "\n\n".join(
-        context_parts
-    )
-
-
-# ============================================================
-# Grounded QA
-# ============================================================
-
-def answer_question(
-    question: str,
-    user_id: str,
-    memory_id: str | None = None,
-):
-
-    if not question or not question.strip():
-        raise ValueError(
-            "Question cannot be empty."
-        )
-
-    if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
-
-    if (
-        memory_id is not None
-        and not memory_id.strip()
-    ):
-        raise ValueError(
-            "Memory ID cannot be empty."
-        )
-
-    results = retrieve(
-        question=question,
-        user_id=user_id,
-        top_k=3,
-        memory_id=memory_id,
-    )
-
-    grounded_results = (
-        get_grounded_results(
-            results
-        )
-    )
-
-    if not grounded_results:
-
-        return {
-            "answer": (
-                "This information wasn't found "
-                "in your memory."
-            ),
-            "sources": [],
-            "grounded": False,
-        }
-
-    context = build_context(
-        grounded_results
-    )
-
-    model = get_qa_model()
-
-    messages = (
-        QA_PROMPT.format_messages(
-            context=context,
-            question=question,
-        )
-    )
-
-    response = model.invoke(
-        messages
-    )
-
-    sources = []
-
-    for document, distance in grounded_results:
-
-        sources.append(
-            {
-                "memory_id":
-                    document.metadata[
-                        "memory_id"
-                    ],
-
-                "memory_type":
-                    document.metadata[
-                        "memory_type"
-                    ],
-
-                "chunk_index":
-                    document.metadata[
-                        "chunk_index"
-                    ],
-
-                "distance":
-                    distance,
-            }
-        )
-
-    return {
-        "answer": response.content,
-        "sources": sources,
-        "grounded": True,
-    }
