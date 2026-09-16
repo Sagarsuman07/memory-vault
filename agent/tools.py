@@ -13,6 +13,10 @@ from database.repositories import (
 )
 
 from rag.retriever import retrieve
+from rag.grounding import (
+    DEFAULT_DISTANCE_THRESHOLD,
+    get_grounded_results,
+)
 
 
 # ============================================================
@@ -199,23 +203,31 @@ def create_tools(
     # Tool 1 — Search Memories
     # ========================================================
 
-    @tool
+    @tool(response_format="content_and_artifact")
     def search_memories(
         query: str,
-    ) -> str:
+    ):
         """
         Search the user's saved memories using semantic search.
 
         The search is automatically restricted to the current
         chat scope. The model cannot choose user_id or memory_id.
+
+        The tool returns:
+            content -> evidence visible to the LLM
+            artifact -> grounding/source metadata used by the app
         """
 
         if not query or not query.strip():
-
             return (
-                "No search query was provided."
+                "No search query was provided.",
+                {
+                    "grounded": False,
+                    "confidence": "Not found",
+                    "distance": None,
+                    "sources": [],
+                },
             )
-
 
         results = retrieve(
             question=query,
@@ -224,49 +236,105 @@ def create_tools(
             memory_id=memory_id,
         )
 
-
         if not results:
-
             return (
-                "No relevant memories were found."
+                "No grounded memory evidence was found for this query. "
+                "Answer exactly: This information wasn't found in your memory.",
+                {
+                    "grounded": False,
+                    "confidence": "Not found",
+                    "distance": None,
+                    "sources": [],
+                },
             )
 
+        # --------------------------------------------------------
+        # Grounding gate
+        # --------------------------------------------------------
+        grounded_results = get_grounded_results(
+            results
+        )
 
+        if not grounded_results:
+            return (
+                "No grounded memory evidence was found for this query. "
+                "Answer exactly: This information wasn't found in your memory.",
+                {
+                    "grounded": False,
+                    "confidence": "Not found",
+                    "distance": None,
+                    "sources": [],
+                    "threshold": DEFAULT_DISTANCE_THRESHOLD,
+                },
+            )
+
+        strongest_distance = min(
+            distance
+            for _, distance in grounded_results
+        )
+
+        if strongest_distance <= 0.4:
+            confidence = "High retrieval confidence"
+        else:
+            confidence = "Medium retrieval confidence"
+
+        # --------------------------------------------------------
+        # Only evidence is exposed to the LLM.
+        #
+        # Grounding status, confidence, distance and source
+        # metadata are stored separately in the artifact.
+        # --------------------------------------------------------
         formatted_results = []
-
+        sources = []
 
         for rank, (
             document,
             distance,
         ) in enumerate(
-            results,
+            grounded_results,
             start=1,
         ):
+            memory_id_value = document.metadata[
+                "memory_id"
+            ]
+
+            memory_type = document.metadata[
+                "memory_type"
+            ]
+
+            chunk_index = document.metadata[
+                "chunk_index"
+            ]
 
             formatted_results.append(
                 f"""
-Result {rank}
-
-Memory ID:
-{document.metadata["memory_id"]}
-
-Memory Type:
-{document.metadata["memory_type"]}
-
-Chunk Index:
-{document.metadata["chunk_index"]}
-
-Distance:
-{distance}
+Evidence {rank}
 
 Content:
 {document.page_content}
-"""
+""".strip()
             )
 
+            sources.append(
+                {
+                    "memory_id": memory_id_value,
+                    "memory_type": memory_type,
+                    "chunk_index": int(chunk_index),
+                    "distance": float(distance),
+                }
+            )
 
-        return "\n\n".join(
-            formatted_results
+        artifact = {
+            "grounded": True,
+            "confidence": confidence,
+            "distance": float(strongest_distance),
+            "threshold": DEFAULT_DISTANCE_THRESHOLD,
+            "sources": sources,
+        }
+
+        return (
+            "\n\n".join(formatted_results),
+            artifact,
         )
 
 

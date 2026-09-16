@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 
 from agent.graph import (
@@ -16,11 +17,7 @@ from memory.memory_service import (
     list_memories,
 )
 
-from rag.retriever import retrieve
-from rag.grounding import (
-    DEFAULT_DISTANCE_THRESHOLD,
-    get_grounded_results,
-)
+from rag.grounding import DEFAULT_DISTANCE_THRESHOLD
 
 
 # ============================================================
@@ -196,22 +193,380 @@ def get_previous_human_question(
 
 
 # ============================================================
-# Retrieval Cache
+# Retrieval / Grounding Signal
 # ============================================================
+
+def get_empty_retrieval_signal():
+    return {
+        "grounded": False,
+        "confidence": "Not found",
+        "sources": [],
+        "distance": None,
+    }
+
+
+def parse_grounding_signal_from_artifact(
+    artifact,
+):
+    """
+    Parse grounding metadata from ToolMessage.artifact.
+
+    New conversations use artifacts so grounding metadata is never
+    placed in the LLM-visible tool content.
+    """
+
+    if not isinstance(artifact, dict):
+        return None
+
+    grounded = artifact.get(
+        "grounded"
+    )
+
+    if grounded is False:
+        return get_empty_retrieval_signal()
+
+    if grounded is not True:
+        return None
+
+    sources = []
+
+    for source in artifact.get(
+        "sources",
+        [],
+    ):
+        if not isinstance(source, dict):
+            continue
+
+        source_copy = dict(source)
+
+        try:
+            source_copy["chunk_index"] = int(
+                source_copy.get(
+                    "chunk_index",
+                    0,
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            source_copy["chunk_index"] = 0
+
+        try:
+            source_copy["distance"] = float(
+                source_copy.get(
+                    "distance"
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            source_copy["distance"] = None
+
+        sources.append(
+            source_copy
+        )
+
+    # Resolve titles from user-owned SQLite records only.
+    try:
+        memories = list_memories(
+            USER_ID
+        )
+
+        memory_map = {
+            memory["id"]: memory
+            for memory in memories
+        }
+
+        for source in sources:
+            source_memory = memory_map.get(
+                source["memory_id"]
+            )
+
+            source["title"] = (
+                source_memory["title"]
+                if source_memory is not None
+                else source["memory_id"]
+            )
+
+    except Exception:
+        for source in sources:
+            source["title"] = source["memory_id"]
+
+    try:
+        distance = float(
+            artifact.get(
+                "distance"
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        distance = None
+
+    return {
+        "grounded": True,
+        "confidence": (
+            artifact.get(
+                "confidence"
+            )
+            or "Grounded"
+        ),
+        "sources": sources,
+        "distance": distance,
+    }
+
+
+def parse_grounding_signal_from_tool_content(
+    tool_content: str,
+):
+    """
+    Backward-compatible parser for conversations created before
+    the artifact-based grounding metadata change.
+    """
+
+    if not tool_content:
+        return None
+
+    content = str(tool_content)
+
+    status_match = re.search(
+        r"GROUNDING_STATUS:\s*(GROUNDED|NOT_GROUNDED)",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    if not status_match:
+        return None
+
+    if status_match.group(1).upper() == "NOT_GROUNDED":
+        return get_empty_retrieval_signal()
+
+    confidence_match = re.search(
+        r"CONFIDENCE:\s*(.+)",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    distance_match = re.search(
+        r"STRONGEST_DISTANCE:\s*([0-9.eE+-]+)",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    confidence = (
+        confidence_match.group(1).strip()
+        if confidence_match
+        else "Grounded"
+    )
+
+    strongest_distance = None
+
+    if distance_match:
+        try:
+            strongest_distance = float(
+                distance_match.group(1)
+            )
+        except ValueError:
+            pass
+
+    sources = []
+
+    # Support both normal newlines and the literal "\n" format
+    # produced by the previous version.
+    normalized_content = content.replace(
+        "\\n",
+        "\n",
+    )
+
+    result_blocks = re.split(
+        r"\n\s*Result\s+\d+\s*\n",
+        normalized_content,
+    )
+
+    for block in result_blocks[1:]:
+        memory_id_match = re.search(
+            r"Memory ID:\s*(.+)",
+            block,
+        )
+
+        memory_type_match = re.search(
+            r"Memory Type:\s*(.+)",
+            block,
+        )
+
+        chunk_match = re.search(
+            r"Chunk Index:\s*(.+)",
+            block,
+        )
+
+        result_distance_match = re.search(
+            r"Distance:\s*([0-9.eE+-]+)",
+            block,
+        )
+
+        if not memory_id_match:
+            continue
+
+        source = {
+            "memory_id":
+                memory_id_match.group(1).strip(),
+            "memory_type": (
+                memory_type_match.group(1).strip()
+                if memory_type_match
+                else "unknown"
+            ),
+            "chunk_index": 0,
+            "distance": None,
+        }
+
+        if chunk_match:
+            try:
+                source["chunk_index"] = int(
+                    chunk_match.group(1).strip()
+                )
+            except ValueError:
+                pass
+
+        if result_distance_match:
+            try:
+                source["distance"] = float(
+                    result_distance_match.group(1).strip()
+                )
+            except ValueError:
+                pass
+
+        sources.append(source)
+
+    try:
+        memories = list_memories(
+            USER_ID
+        )
+
+        memory_map = {
+            memory["id"]: memory
+            for memory in memories
+        }
+
+        for source in sources:
+            source_memory = memory_map.get(
+                source["memory_id"]
+            )
+
+            source["title"] = (
+                source_memory["title"]
+                if source_memory is not None
+                else source["memory_id"]
+            )
+
+    except Exception:
+        for source in sources:
+            source["title"] = source["memory_id"]
+
+    return {
+        "grounded": True,
+        "confidence": confidence,
+        "sources": sources,
+        "distance": strongest_distance,
+    }
+
+
+def get_tool_grounding_signal_for_answer(
+    messages,
+    assistant_index: int,
+):
+    """
+    Find the search_memories ToolMessage associated with the
+    current assistant answer.
+
+    Prefer ToolMessage.artifact. Fall back to the old content
+    parser for historical conversations.
+    """
+
+    for index in range(
+        assistant_index - 1,
+        -1,
+        -1,
+    ):
+        message = messages[index]
+        message_type = get_message_type(
+            message
+        )
+
+        if message_type == "human":
+            break
+
+        if message_type != "tool":
+            continue
+
+        tool_name = getattr(
+            message,
+            "name",
+            "",
+        )
+
+        if tool_name != "search_memories":
+            continue
+
+        # New format: metadata is stored separately.
+        artifact_signal = (
+            parse_grounding_signal_from_artifact(
+                getattr(
+                    message,
+                    "artifact",
+                    None,
+                )
+            )
+        )
+
+        if artifact_signal is not None:
+            return artifact_signal
+
+        # Backward compatibility for old persisted messages.
+        content_signal = (
+            parse_grounding_signal_from_tool_content(
+                get_message_content(
+                    message
+                )
+            )
+        )
+
+        if content_signal is not None:
+            return content_signal
+
+    return None
+
+
+def get_retrieval_signal(
+    question: str,
+    memory_id: str | None,
+    messages=None,
+    assistant_index: int | None = None,
+):
+    """
+    Read grounding/confidence metadata from the actual
+    search_memories ToolMessage used by LangGraph.
+    """
+
+    if messages is not None and assistant_index is not None:
+        signal = get_tool_grounding_signal_for_answer(
+            messages=messages,
+            assistant_index=assistant_index,
+        )
+
+        if signal is not None:
+            return signal
+
+    return get_empty_retrieval_signal()
+
 
 def get_cache_key(
     thread_id: str,
     question: str,
     memory_id: str | None,
 ):
-    """
-    Build a unique retrieval-cache key.
-
-    Thread ID is intentionally included so that the
-    same question in two different conversations does
-    not accidentally share UI evidence.
-    """
-
     scope_key = (
         memory_id
         if memory_id
@@ -225,156 +580,18 @@ def get_cache_key(
     )
 
 
-def get_empty_retrieval_signal():
-    return {
-        "grounded": False,
-        "confidence": "Not found",
-        "sources": [],
-    }
-
-
-def get_retrieval_signal(
-    question: str,
-    memory_id: str | None,
-):
-    """
-    Perform retrieval once and convert it into the
-    confidence/source information used by the UI.
-
-    IMPORTANT:
-    This function should only be called when the
-    retrieval signal is not already cached.
-    """
-
-    results = retrieve(
-        question=question,
-        user_id=USER_ID,
-        top_k=3,
-        memory_id=memory_id,
-    )
-
-    grounded_results = get_grounded_results(
-        results
-    )
-
-    if not grounded_results:
-        return get_empty_retrieval_signal()
-
-    # --------------------------------------------------------
-    # Strongest match
-    # --------------------------------------------------------
-
-    strongest_distance = min(
-        distance
-        for _, distance in grounded_results
-    )
-
-    if (
-        strongest_distance
-        <= HIGH_RETRIEVAL_DISTANCE
-    ):
-
-        confidence = (
-            "High retrieval confidence"
-        )
-
-    elif (
-        strongest_distance
-        <= MEDIUM_RETRIEVAL_DISTANCE
-    ):
-
-        confidence = (
-            "Medium retrieval confidence"
-        )
-
-    else:
-
-        confidence = (
-            "Low retrieval confidence"
-        )
-
-    # --------------------------------------------------------
-    # Build memory lookup
-    # --------------------------------------------------------
-
-    memories = list_memories(
-        USER_ID
-    )
-
-    memory_map = {
-        memory["id"]: memory
-        for memory in memories
-    }
-
-    # --------------------------------------------------------
-    # Build source information
-    # --------------------------------------------------------
-
-    sources = []
-
-    for (
-        document,
-        distance,
-    ) in grounded_results:
-
-        source_memory_id = (
-            document.metadata.get(
-                "memory_id"
-            )
-        )
-
-        source_memory = memory_map.get(
-            source_memory_id
-        )
-
-        sources.append(
-            {
-                "memory_id":
-                    source_memory_id,
-
-                "title": (
-                    source_memory["title"]
-                    if source_memory is not None
-                    else source_memory_id
-                ),
-
-                "memory_type":
-                    document.metadata.get(
-                        "memory_type",
-                        "unknown",
-                    ),
-
-                "chunk_index":
-                    document.metadata.get(
-                        "chunk_index",
-                        0,
-                    ),
-
-                "distance":
-                    distance,
-            }
-        )
-
-    return {
-        "grounded": True,
-        "confidence": confidence,
-        "sources": sources,
-    }
-
-
 def get_or_create_retrieval_signal(
     thread_id: str,
     question: str,
     memory_id: str | None,
+    messages=None,
+    assistant_index: int | None = None,
 ):
     """
-    Return cached retrieval information.
+    Return cached grounding information.
 
-    If it does not exist, calculate it once.
-
-    This is the important fix for conversation history:
-    rendering old messages does not repeatedly call Chroma
-    after the first retrieval for that message.
+    Grounding is produced by LangGraph's search_memories tool.
+    Chroma is not queried again just to display confidence.
     """
 
     cache = st.session_state[
@@ -390,18 +607,12 @@ def get_or_create_retrieval_signal(
     if cache_key in cache:
         return cache[cache_key]
 
-    try:
-
-        signal = get_retrieval_signal(
-            question=question,
-            memory_id=memory_id,
-        )
-
-    except Exception:
-
-        signal = (
-            get_empty_retrieval_signal()
-        )
+    signal = get_retrieval_signal(
+        question=question,
+        memory_id=memory_id,
+        messages=messages,
+        assistant_index=assistant_index,
+    )
 
     cache[cache_key] = signal
 
@@ -1708,6 +1919,8 @@ for index, message in enumerate(
                     thread_id=thread_id,
                     question=question,
                     memory_id=conversation_memory_id,
+                    messages=conversation_messages,
+                    assistant_index=index,
                 )
             )
 
@@ -1739,10 +1952,9 @@ for index, message in enumerate(
                             st.write(
                                 (
                                     f"**{source['title']}** "
-                                    f"• chunk "
-                                    f"{source['chunk_index']} "
-                                    f"• distance "
-                                    f"{source['distance']:.4f}"
+                                    f"• Chunk "
+                                    f"{source['chunk_index'] + 1} "
+                                    f"• {source['memory_type'].capitalize()}"
                                 )
                             )
 
@@ -1848,19 +2060,51 @@ if question:
                 )
 
             # ------------------------------------------------
-            # Calculate retrieval evidence ONCE.
+            # Read the persisted LangGraph state and extract
+            # grounding metadata from the actual search_memories
+            # ToolMessage.
             #
-            # The result is stored in the cache.
-            #
-            # When Streamlit reruns and renders this new
-            # conversation, the retrieval will NOT happen
-            # again.
+            # No second semantic retrieval is performed.
             # ------------------------------------------------
+            updated_thread_state = get_thread_state(
+                user_id=USER_ID,
+                thread_id=thread_id,
+            )
+
+            updated_messages = (
+                updated_thread_state.values.get(
+                    "messages",
+                    [],
+                )
+            )
+
+            assistant_index = None
+
+            for message_index in range(
+                len(updated_messages) - 1,
+                -1,
+                -1,
+            ):
+                if (
+                    get_message_type(
+                        updated_messages[message_index]
+                    )
+                    == "ai"
+                ):
+                    content = get_message_content(
+                        updated_messages[message_index]
+                    )
+
+                    if content.strip():
+                        assistant_index = message_index
+                        break
 
             get_or_create_retrieval_signal(
                 thread_id=thread_id,
                 question=question,
                 memory_id=current_memory_id,
+                messages=updated_messages,
+                assistant_index=assistant_index,
             )
 
             # ------------------------------------------------
