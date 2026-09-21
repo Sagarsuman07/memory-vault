@@ -1,5 +1,7 @@
 import re
+import html
 import streamlit as st
+
 
 from agent.graph import (
     create_thread_id,
@@ -9,13 +11,16 @@ from agent.graph import (
     _checkpointer,
 )
 
+
 from config.settings import settings
 from database.database import initialize_database
+
 
 from memory.memory_service import (
     get_memory_by_id,
     list_memories,
 )
+
 
 from rag.grounding import DEFAULT_DISTANCE_THRESHOLD
 
@@ -58,6 +63,7 @@ MEDIUM_RETRIEVAL_DISTANCE = (
     DEFAULT_DISTANCE_THRESHOLD
 )
 
+
 NOT_FOUND_MESSAGE = (
     "This information wasn't found in your memory."
 )
@@ -81,12 +87,14 @@ def get_existing_memory(
         return None
 
     try:
+
         return get_memory_by_id(
             memory_id=memory_id,
             user_id=USER_ID,
         )
 
     except ValueError:
+
         return None
 
 
@@ -106,6 +114,7 @@ def normalize_scope(
     """
 
     if value == "memory":
+
         return "memory"
 
     return "all"
@@ -123,6 +132,7 @@ def get_scope_memory_id():
         st.session_state.get("chat_scope")
         == "memory"
     ):
+
         return st.session_state.get(
             "chat_memory_id"
         )
@@ -137,6 +147,7 @@ def get_scope_memory_id():
 def get_message_type(
     message,
 ) -> str:
+
     return getattr(
         message,
         "type",
@@ -158,6 +169,7 @@ def get_message_content(
         content,
         str,
     ):
+
         return content
 
     return str(content)
@@ -197,6 +209,7 @@ def get_previous_human_question(
 # ============================================================
 
 def get_empty_retrieval_signal():
+
     return {
         "grounded": False,
         "confidence": "Not found",
@@ -215,7 +228,11 @@ def parse_grounding_signal_from_artifact(
     placed in the LLM-visible tool content.
     """
 
-    if not isinstance(artifact, dict):
+    if not isinstance(
+        artifact,
+        dict,
+    ):
+
         return None
 
     grounded = artifact.get(
@@ -223,9 +240,11 @@ def parse_grounding_signal_from_artifact(
     )
 
     if grounded is False:
+
         return get_empty_retrieval_signal()
 
     if grounded is not True:
+
         return None
 
     sources = []
@@ -234,34 +253,45 @@ def parse_grounding_signal_from_artifact(
         "sources",
         [],
     ):
-        if not isinstance(source, dict):
+
+        if not isinstance(
+            source,
+            dict,
+        ):
+
             continue
 
         source_copy = dict(source)
 
         try:
+
             source_copy["chunk_index"] = int(
                 source_copy.get(
                     "chunk_index",
                     0,
                 )
             )
+
         except (
             TypeError,
             ValueError,
         ):
+
             source_copy["chunk_index"] = 0
 
         try:
+
             source_copy["distance"] = float(
                 source_copy.get(
                     "distance"
                 )
             )
+
         except (
             TypeError,
             ValueError,
         ):
+
             source_copy["distance"] = None
 
         sources.append(
@@ -270,6 +300,7 @@ def parse_grounding_signal_from_artifact(
 
     # Resolve titles from user-owned SQLite records only.
     try:
+
         memories = list_memories(
             USER_ID
         )
@@ -280,6 +311,7 @@ def parse_grounding_signal_from_artifact(
         }
 
         for source in sources:
+
             source_memory = memory_map.get(
                 source["memory_id"]
             )
@@ -291,19 +323,24 @@ def parse_grounding_signal_from_artifact(
             )
 
     except Exception:
+
         for source in sources:
+
             source["title"] = source["memory_id"]
 
     try:
+
         distance = float(
             artifact.get(
                 "distance"
             )
         )
+
     except (
         TypeError,
         ValueError,
     ):
+
         distance = None
 
     return {
@@ -328,6 +365,7 @@ def parse_grounding_signal_from_tool_content(
     """
 
     if not tool_content:
+
         return None
 
     content = str(tool_content)
@@ -339,9 +377,11 @@ def parse_grounding_signal_from_tool_content(
     )
 
     if not status_match:
+
         return None
 
     if status_match.group(1).upper() == "NOT_GROUNDED":
+
         return get_empty_retrieval_signal()
 
     confidence_match = re.search(
@@ -365,11 +405,15 @@ def parse_grounding_signal_from_tool_content(
     strongest_distance = None
 
     if distance_match:
+
         try:
+
             strongest_distance = float(
                 distance_match.group(1)
             )
+
         except ValueError:
+
             pass
 
     sources = []
@@ -387,6 +431,7 @@ def parse_grounding_signal_from_tool_content(
     )
 
     for block in result_blocks[1:]:
+
         memory_id_match = re.search(
             r"Memory ID:\s*(.+)",
             block,
@@ -408,39 +453,51 @@ def parse_grounding_signal_from_tool_content(
         )
 
         if not memory_id_match:
+
             continue
 
         source = {
             "memory_id":
                 memory_id_match.group(1).strip(),
+
             "memory_type": (
                 memory_type_match.group(1).strip()
                 if memory_type_match
                 else "unknown"
             ),
+
             "chunk_index": 0,
             "distance": None,
         }
 
         if chunk_match:
+
             try:
+
                 source["chunk_index"] = int(
                     chunk_match.group(1).strip()
                 )
+
             except ValueError:
+
                 pass
 
         if result_distance_match:
+
             try:
+
                 source["distance"] = float(
                     result_distance_match.group(1).strip()
                 )
+
             except ValueError:
+
                 pass
 
         sources.append(source)
 
     try:
+
         memories = list_memories(
             USER_ID
         )
@@ -451,6 +508,7 @@ def parse_grounding_signal_from_tool_content(
         }
 
         for source in sources:
+
             source_memory = memory_map.get(
                 source["memory_id"]
             )
@@ -462,7 +520,9 @@ def parse_grounding_signal_from_tool_content(
             )
 
     except Exception:
+
         for source in sources:
+
             source["title"] = source["memory_id"]
 
     return {
@@ -490,15 +550,19 @@ def get_tool_grounding_signal_for_answer(
         -1,
         -1,
     ):
+
         message = messages[index]
+
         message_type = get_message_type(
             message
         )
 
         if message_type == "human":
+
             break
 
         if message_type != "tool":
+
             continue
 
         tool_name = getattr(
@@ -508,6 +572,7 @@ def get_tool_grounding_signal_for_answer(
         )
 
         if tool_name != "search_memories":
+
             continue
 
         # New format: metadata is stored separately.
@@ -522,6 +587,7 @@ def get_tool_grounding_signal_for_answer(
         )
 
         if artifact_signal is not None:
+
             return artifact_signal
 
         # Backward compatibility for old persisted messages.
@@ -534,6 +600,7 @@ def get_tool_grounding_signal_for_answer(
         )
 
         if content_signal is not None:
+
             return content_signal
 
     return None
@@ -550,13 +617,18 @@ def get_retrieval_signal(
     search_memories ToolMessage used by LangGraph.
     """
 
-    if messages is not None and assistant_index is not None:
+    if (
+        messages is not None
+        and assistant_index is not None
+    ):
+
         signal = get_tool_grounding_signal_for_answer(
             messages=messages,
             assistant_index=assistant_index,
         )
 
         if signal is not None:
+
             return signal
 
     return get_empty_retrieval_signal()
@@ -567,6 +639,7 @@ def get_cache_key(
     question: str,
     memory_id: str | None,
 ):
+
     scope_key = (
         memory_id
         if memory_id
@@ -605,6 +678,7 @@ def get_or_create_retrieval_signal(
     )
 
     if cache_key in cache:
+
         return cache[cache_key]
 
     signal = get_retrieval_signal(
@@ -634,6 +708,41 @@ def go_to_dashboard():
         "app.py"
     )
 
+
+def open_memory_from_source(memory_id: str):
+    """
+    Open the Memory Detail page for a source memory.
+
+    The memory ID comes from the user-scoped grounding artifact.
+    """
+
+    if not memory_id:
+        st.toast(
+            "This source memory could not be opened.",
+            icon="⚠️",
+        )
+        return
+
+    # Re-validate ownership before navigation.
+    memory = get_existing_memory(memory_id)
+
+    if memory is None:
+        st.toast(
+            "This memory no longer exists.",
+            icon="⚠️",
+        )
+        return
+
+    # Store the selected memory in session state.
+    # Memory Detail uses this value when opening the page.
+    st.session_state["selected_memory_id"] = memory_id
+
+    # Also keep it in the URL/query parameters.
+    st.query_params["memory_id"] = memory_id
+
+    st.switch_page(
+        "pages/memory_detail.py"
+    )
 
 # ============================================================
 # New Conversation
@@ -954,6 +1063,7 @@ query_thread_id = (
         "thread_id"
     )
 )
+
 
 if query_thread_id:
 
@@ -1945,18 +2055,83 @@ for index, message in enumerate(
                         "Sources"
                     ):
 
-                        for source in (
+                        # Keep every source compact and on one line.
+                        # Long titles use an ellipsis instead of wrapping.
+
+                        for source_index, source in enumerate(
                             signal["sources"]
                         ):
 
-                            st.write(
-                                (
-                                    f"**{source['title']}** "
-                                    f"• Chunk "
-                                    f"{source['chunk_index'] + 1} "
-                                    f"• {source['memory_type'].capitalize()}"
+                            source_memory_id = source.get(
+                                "memory_id"
+                            )
+
+                            source_title = (
+                                source.get("title")
+                                or source_memory_id
+                                or "Untitled Memory"
+                            )
+
+                            source_type = (
+                                source.get("memory_type")
+                                or "unknown"
+                            )
+
+                            source_type = (
+                                str(source_type)
+                                .capitalize()
+                            )
+
+                            source_col1, source_col2, source_col3 = (
+                                st.columns(
+                                    [0.70, 0.18, 0.12],
+                                    vertical_alignment="center",
                                 )
                             )
+
+                            with source_col1:
+
+                                safe_title = html.escape(
+                                    str(source_title),
+                                    quote=True,
+                                )
+
+                                st.markdown(
+                                    f'<div title="{safe_title}" '
+                                    'style="'
+                                    'white-space: nowrap; '
+                                    'overflow: hidden; '
+                                    'text-overflow: ellipsis; '
+                                    'width: 100%; '
+                                    'line-height: 2rem;'
+                                    '">'
+                                    f"{safe_title}"
+                                    "</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                            with source_col2:
+
+                                st.caption(
+                                    source_type
+                                )
+
+                            with source_col3:
+
+                                if st.button(
+                                    "Open",
+                                    key=(
+                                        f"source_open_"
+                                        f"{index}_"
+                                        f"{source_index}_"
+                                        f"{source_memory_id}"
+                                    ),
+                                    use_container_width=True,
+                                ):
+
+                                    open_memory_from_source(
+                                        source_memory_id
+                                    )
 
             # ------------------------------------------------
             # Not found
@@ -2066,6 +2241,7 @@ if question:
             #
             # No second semantic retrieval is performed.
             # ------------------------------------------------
+
             updated_thread_state = get_thread_state(
                 user_id=USER_ID,
                 thread_id=thread_id,
@@ -2085,18 +2261,22 @@ if question:
                 -1,
                 -1,
             ):
+
                 if (
                     get_message_type(
                         updated_messages[message_index]
                     )
                     == "ai"
                 ):
+
                     content = get_message_content(
                         updated_messages[message_index]
                     )
 
                     if content.strip():
+
                         assistant_index = message_index
+
                         break
 
             get_or_create_retrieval_signal(
