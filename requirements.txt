@@ -3,37 +3,35 @@
 Pillow
 reportlab
 
-#langsmith
+langsmith
 
-#langgraph-checkpoint-sqlite
+langgraph-checkpoint-sqlite
 
-#langgraph
+langchain-tavily
 
-#langchain-tavily
-
-#langchain-groq
+langchain-groq
 
 
-#python-dotenv
-#langchain
-#langchain-core
-#langgraph
-#chromadb
-#sqlalchemy
-#pydantic
+python-dotenv
+langchain
+langchain-core
+langgraph
+chromadb
+sqlalchemy
+pydantic
 
 
-#streamlit
-#python-dotenv
+streamlit
+python-dotenv
 
-#ollama
-#groq
+ollama
+groq
 
-#PyMuPDF
-#python-docx
+PyMuPDF
+python-docx
 
-#langchain-core
-#langchain-text-splitters
-#langchain-chroma
-#langchain-huggingface
-#sentence-transformers
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-huggingface
+sentence-transformers
