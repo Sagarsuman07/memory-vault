@@ -14,7 +14,10 @@ from langgraph.prebuilt import (
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from agent.state import AgentState
+from agent.state import (
+    AgentState,
+    MemoryScope,
+)
 
 from agent.nodes import (
     understand_query,
@@ -25,6 +28,10 @@ from agent.nodes import (
 from agent.tools import create_tools
 
 from config.settings import settings
+
+from database.repositories import (
+    get_memory as get_memory_record,
+)
 
 
 # ============================================================
@@ -114,6 +121,82 @@ def validate_thread_id(
 
 
 # ============================================================
+# Memory Scope
+# ============================================================
+
+def build_memory_scope(
+    user_id: str,
+    memory_id: str | None = None,
+) -> MemoryScope:
+    """
+    Build the backend-controlled memory authorization scope.
+
+    IMPORTANT:
+    - user_id comes from the application/session.
+    - memory_id comes from the application/UI selection.
+    - the LLM never creates this object.
+    - selected memory ownership is validated here.
+    """
+
+    if not user_id or not user_id.strip():
+
+        raise ValueError(
+            "User ID cannot be empty."
+        )
+
+    user_id = user_id.strip()
+
+    # --------------------------------------------------------
+    # Global scope
+    # --------------------------------------------------------
+
+    if memory_id is None:
+
+        return {
+            "user_id": user_id,
+            "scope_type": "all",
+            "memory_ids": None,
+        }
+
+    # --------------------------------------------------------
+    # Validate selected memory ID
+    # --------------------------------------------------------
+
+    memory_id = memory_id.strip()
+
+    if not memory_id:
+
+        raise ValueError(
+            "Memory ID cannot be empty."
+        )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Validate ownership BEFORE constructing the graph.
+    # --------------------------------------------------------
+
+    memory = get_memory_record(
+        memory_id=memory_id,
+        user_id=user_id,
+    )
+
+    if memory is None:
+
+        raise ValueError(
+            "Selected memory does not belong "
+            "to the current user."
+        )
+
+    return {
+        "user_id": user_id,
+        "scope_type": "memory",
+        "memory_ids": [
+            memory_id
+        ],
+    }
+
+
+# ============================================================
 # Build Graph
 # ============================================================
 
@@ -122,28 +205,21 @@ def build_agent_graph(
     memory_id: str | None = None,
 ):
 
-    if not user_id or not user_id.strip():
+    # --------------------------------------------------------
+    # Build and validate backend-controlled scope.
+    # --------------------------------------------------------
 
-        raise ValueError(
-            "User ID cannot be empty."
-        )
-
-    if (
-        memory_id is not None
-        and not memory_id.strip()
-    ):
-
-        raise ValueError(
-            "Memory ID cannot be empty."
-        )
+    memory_scope = build_memory_scope(
+        user_id=user_id,
+        memory_id=memory_id,
+    )
 
     # ========================================================
-    # Create tools for current user + current scope
+    # Create tools for current backend scope
     # ========================================================
 
     tools = create_tools(
-        user_id=user_id,
-        memory_id=memory_id,
+        scope=memory_scope,
     )
 
     # ========================================================
@@ -286,6 +362,17 @@ def run_langgraph_agent(
     )
 
     # ========================================================
+    # Build and validate backend scope
+    #
+    # This also validates selected-memory ownership.
+    # ========================================================
+
+    memory_scope = build_memory_scope(
+        user_id=user_id,
+        memory_id=memory_id,
+    )
+
+    # ========================================================
     # Build graph
     # ========================================================
 
@@ -321,6 +408,12 @@ def run_langgraph_agent(
         ),
 
         "memory_id": memory_id,
+
+        # ----------------------------------------------------
+        # Formal backend-controlled scope.
+        # ----------------------------------------------------
+
+        "memory_scope": memory_scope,
 
         "final_answer": "",
 
@@ -376,6 +469,10 @@ def run_langgraph_agent(
         ),
 
         "memory_id": memory_id,
+
+        # Useful for application-level debugging/testing.
+        # This is backend-generated, not model-generated.
+        "memory_scope": memory_scope,
     }
 
 

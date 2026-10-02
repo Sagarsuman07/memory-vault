@@ -245,24 +245,29 @@ def agent_node(
     state,
 ):
 
-    user_id = state[
-        "user_id"
-    ]
+    # ========================================================
+    # Get backend-controlled scope
+    # ========================================================
 
-    memory_id = state.get(
-        "memory_id"
+    memory_scope = state.get(
+        "memory_scope"
     )
 
+    if not memory_scope:
+
+        raise ValueError(
+            "Backend memory scope is missing."
+        )
 
     # ========================================================
-    # Create tools for current user + current scope
+    # Create tools using the backend-controlled scope.
+    #
+    # The LLM cannot modify user_id or memory_ids.
     # ========================================================
 
     tools = create_tools(
-        user_id=user_id,
-        memory_id=memory_id,
+        scope=memory_scope,
     )
-
 
     # ========================================================
     # Validate Groq configuration
@@ -274,7 +279,6 @@ def agent_node(
             "GROQ_API_KEY is not configured."
         )
 
-
     # ========================================================
     # Create model
     # ========================================================
@@ -285,7 +289,6 @@ def agent_node(
         api_key=settings.GROQ_API_KEY,
     )
 
-
     # ========================================================
     # Bind tools
     # ========================================================
@@ -294,7 +297,6 @@ def agent_node(
         tools
     )
 
-
     # ========================================================
     # Get messages
     # ========================================================
@@ -302,7 +304,6 @@ def agent_node(
     messages = state[
         "messages"
     ]
-
 
     # ========================================================
     # Add system prompt
@@ -316,7 +317,6 @@ def agent_node(
             )
         ]
 
-
     elif not isinstance(
         messages[0],
         SystemMessage,
@@ -328,6 +328,46 @@ def agent_node(
             ),
             *messages,
         ]
+
+    # ========================================================
+    # Invoke agent
+    # ========================================================
+
+    response = model_with_tools.invoke(
+        messages
+    )
+
+    # ========================================================
+    # Track tool calls
+    # ========================================================
+
+    tool_trace = list(
+        state.get(
+            "tool_calls",
+            [],
+        )
+    )
+
+    for tool_call in response.tool_calls:
+
+        tool_trace.append(
+            {
+                "tool":
+                    tool_call["name"],
+
+                "arguments":
+                    tool_call["args"],
+            }
+        )
+
+    return {
+        "messages": [
+            response
+        ],
+
+        "tool_calls":
+            tool_trace,
+    }
 
 
     # ========================================================
