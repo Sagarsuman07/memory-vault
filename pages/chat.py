@@ -2051,6 +2051,36 @@ for index, message in enumerate(
 
                 if signal["sources"]:
 
+                    # ------------------------------------------------
+                    # Deduplicate sources by memory_id.
+                    #
+                    # Retrieval happens at chunk level, but the
+                    # Chat UI displays sources at memory level.
+                    # ------------------------------------------------
+
+                    unique_sources = []
+                    seen_memory_ids = set()
+
+                    for source in signal["sources"]:
+
+                        memory_id = source.get(
+                            "memory_id"
+                        )
+
+                        if not memory_id:
+                            continue
+
+                        if memory_id in seen_memory_ids:
+                            continue
+
+                        seen_memory_ids.add(
+                            memory_id
+                        )
+
+                        unique_sources.append(
+                            source
+                        )
+
                     with st.expander(
                         "Sources"
                     ):
@@ -2059,7 +2089,7 @@ for index, message in enumerate(
                         # Long titles use an ellipsis instead of wrapping.
 
                         for source_index, source in enumerate(
-                            signal["sources"]
+                            unique_sources
                         ):
 
                             source_memory_id = source.get(
@@ -2078,8 +2108,7 @@ for index, message in enumerate(
                             )
 
                             source_type = (
-                                str(source_type)
-                                .capitalize()
+                                str(source_type).capitalize()
                             )
 
                             source_col1, source_col2, source_col3 = (
@@ -2132,7 +2161,6 @@ for index, message in enumerate(
                                     open_memory_from_source(
                                         source_memory_id
                                     )
-
             # ------------------------------------------------
             # Not found
             # ------------------------------------------------

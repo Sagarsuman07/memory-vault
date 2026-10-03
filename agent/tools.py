@@ -2,8 +2,6 @@ import ast
 import operator as op
 
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
 from config.settings import settings
@@ -19,6 +17,237 @@ from rag.grounding import (
 )
 
 from agent.state import MemoryScope
+
+
+# ============================================================
+# Phase 0.2 — Tool Output Limits
+# ============================================================
+
+# Number of retrieved evidence chunks returned by search_memories.
+MAX_MEMORY_SEARCH_CHUNKS = 5
+
+# Maximum characters from one retrieved chunk.
+MAX_CHARS_PER_MEMORY_CHUNK = 1500
+
+# Maximum characters across all retrieved memory evidence.
+MAX_MEMORY_EVIDENCE_CHARS = 7500
+
+# Maximum extracted-content characters returned by get_memory.
+MAX_MEMORY_DETAIL_CHARS = 4000
+
+# Maximum characters returned by search_web.
+MAX_WEB_RESULT_CHARS = 6000
+
+# Marker used when tool output is truncated.
+TRUNCATION_MARKER = "\n...[truncated]"
+
+
+# ============================================================
+# Generic Text Limiter
+# ============================================================
+
+def _truncate_text(
+    text: str,
+    max_chars: int,
+) -> str:
+    """
+    Limit tool output to a fixed number of characters.
+
+    The limit is intentionally character-based in Phase 0.2.
+    Phase 2 will introduce token-aware budgets.
+
+    Args:
+        text: Text to limit.
+        max_chars: Maximum allowed characters.
+
+    Returns:
+        Original text if within the limit, otherwise a
+        truncated version with an explicit marker.
+    """
+
+    if not text:
+        return ""
+
+    if max_chars <= 0:
+        return ""
+
+    text = str(text).strip()
+
+    if len(text) <= max_chars:
+        return text
+
+    # Keep the marker inside the requested limit.
+    content_limit = max_chars - len(
+        TRUNCATION_MARKER
+    )
+
+    if content_limit <= 0:
+        return TRUNCATION_MARKER[:max_chars]
+
+    return (
+        text[:content_limit].rstrip()
+        + TRUNCATION_MARKER
+    )
+
+
+# ============================================================
+# Memory Evidence Limiter
+# ============================================================
+
+def _build_memory_evidence(
+    grounded_results,
+    scope: MemoryScope,
+):
+    """
+    Convert grounded retrieval results into bounded tool output.
+
+    Limits:
+        - Maximum number of chunks.
+        - Maximum characters per chunk.
+        - Maximum total evidence characters.
+
+    Returns:
+        formatted evidence,
+        source metadata,
+        strongest distance
+    """
+
+    formatted_results = []
+    sources = []
+
+    total_chars = 0
+
+    strongest_distance = None
+
+    evidence_rank = 0
+
+    for document, distance in grounded_results:
+
+        # ----------------------------------------------------
+        # Enforce chunk count.
+        # ----------------------------------------------------
+
+        if evidence_rank >= MAX_MEMORY_SEARCH_CHUNKS:
+            break
+
+        memory_id_value = document.metadata.get(
+            "memory_id"
+        )
+
+        # ----------------------------------------------------
+        # Defense-in-depth scope check.
+        # ----------------------------------------------------
+
+        if not memory_id_value:
+            continue
+
+        if not _is_memory_allowed(
+            scope,
+            memory_id_value,
+        ):
+            continue
+
+        memory_type = document.metadata.get(
+            "memory_type",
+            "unknown",
+        )
+
+        chunk_index = document.metadata.get(
+            "chunk_index",
+            0,
+        )
+
+        # ----------------------------------------------------
+        # Calculate remaining total evidence budget.
+        # ----------------------------------------------------
+
+        remaining_chars = (
+            MAX_MEMORY_EVIDENCE_CHARS
+            - total_chars
+        )
+
+        if remaining_chars <= 0:
+            break
+
+        # ----------------------------------------------------
+        # Apply per-chunk limit AND total limit.
+        # ----------------------------------------------------
+
+        chunk_limit = min(
+            MAX_CHARS_PER_MEMORY_CHUNK,
+            remaining_chars,
+        )
+
+        content = _truncate_text(
+            document.page_content,
+            chunk_limit,
+        )
+
+        if not content:
+            continue
+
+        evidence_rank += 1
+
+        evidence = (
+            f"Evidence {evidence_rank}\n\n"
+            f"Content:\n"
+            f"{content}"
+        )
+
+        # ----------------------------------------------------
+        # Protect total output budget.
+        #
+        # The evidence wrapper itself also consumes chars,
+        # so check the complete formatted evidence.
+        # ----------------------------------------------------
+
+        evidence_remaining = (
+            MAX_MEMORY_EVIDENCE_CHARS
+            - total_chars
+        )
+
+        if len(evidence) > evidence_remaining:
+
+            evidence = _truncate_text(
+                evidence,
+                evidence_remaining,
+            )
+
+        if not evidence:
+            break
+
+        formatted_results.append(
+            evidence
+        )
+
+        total_chars += len(
+            evidence
+        )
+
+        sources.append(
+            {
+                "memory_id": memory_id_value,
+                "memory_type": memory_type,
+                "chunk_index": int(
+                    chunk_index
+                ),
+                "distance": float(
+                    distance
+                ),
+            }
+        )
+
+        if (
+            strongest_distance is None
+            or distance < strongest_distance
+        ):
+            strongest_distance = distance
+
+    return (
+        formatted_results,
+        sources,
+        strongest_distance,
+    )
 
 
 # ============================================================
@@ -38,12 +267,17 @@ _ALLOWED_OPERATORS = {
 }
 
 
-def _safe_calculate(node):
+def _safe_calculate(
+    node,
+):
     """
     Recursively evaluate a restricted arithmetic AST.
     """
 
-    if isinstance(node, ast.Constant):
+    if isinstance(
+        node,
+        ast.Constant,
+    ):
 
         if isinstance(
             node.value,
@@ -55,7 +289,10 @@ def _safe_calculate(node):
             "Only numbers are allowed."
         )
 
-    if isinstance(node, ast.UnaryOp):
+    if isinstance(
+        node,
+        ast.UnaryOp,
+    ):
 
         operator = _ALLOWED_OPERATORS.get(
             type(node.op)
@@ -73,7 +310,10 @@ def _safe_calculate(node):
             )
         )
 
-    if isinstance(node, ast.BinOp):
+    if isinstance(
+        node,
+        ast.BinOp,
+    ):
 
         operator = _ALLOWED_OPERATORS.get(
             type(node.op)
@@ -93,12 +333,12 @@ def _safe_calculate(node):
             node.right
         )
 
-        # ----------------------------------------
-        # Prevent dangerous exponentiation
-        # ----------------------------------------
-
+        # Prevent dangerous exponentiation.
         if (
-            isinstance(node.op, ast.Pow)
+            isinstance(
+                node.op,
+                ast.Pow,
+            )
             and abs(right) > 10
         ):
 
@@ -117,10 +357,13 @@ def _safe_calculate(node):
 
 
 def calculate_expression(
-    expression: str
+    expression: str,
 ):
 
-    if not expression or not expression.strip():
+    if (
+        not expression
+        or not expression.strip()
+    ):
 
         raise ValueError(
             "Expression cannot be empty."
@@ -133,11 +376,9 @@ def calculate_expression(
             mode="eval",
         )
 
-        result = _safe_calculate(
+        return _safe_calculate(
             tree.body
         )
-
-        return result
 
     except ZeroDivisionError:
 
@@ -165,22 +406,28 @@ def _validate_scope(
 ):
     """
     Validate the backend-created memory scope.
-
-    This function is intentionally independent of the LLM.
-
-    The LLM cannot create or modify this scope because the scope
-    is supplied by the application when the tools are created.
     """
 
-    if not isinstance(scope, dict):
+    if not isinstance(
+        scope,
+        dict,
+    ):
 
         raise ValueError(
             "Invalid memory scope."
         )
 
-    user_id = scope.get("user_id")
+    user_id = scope.get(
+        "user_id"
+    )
 
-    if not isinstance(user_id, str) or not user_id.strip():
+    if (
+        not isinstance(
+            user_id,
+            str,
+        )
+        or not user_id.strip()
+    ):
 
         raise ValueError(
             "Memory scope user ID cannot be empty."
@@ -213,10 +460,13 @@ def _validate_scope(
 
     else:
 
-        if not isinstance(
-            memory_ids,
-            list,
-        ) or not memory_ids:
+        if (
+            not isinstance(
+                memory_ids,
+                list,
+            )
+            or not memory_ids
+        ):
 
             raise ValueError(
                 "Memory scope must contain at least one memory ID."
@@ -249,13 +499,9 @@ def _is_memory_allowed(
     if not memory_id:
         return False
 
-    # Global scope:
-    # authorization is handled by user_id filtering.
     if scope["scope_type"] == "all":
         return True
 
-    # Memory-scoped chat:
-    # only explicitly selected memories are allowed.
     return memory_id in (
         scope["memory_ids"] or []
     )
@@ -269,16 +515,13 @@ def create_tools(
     scope: MemoryScope,
 ):
 
-    # --------------------------------------------------------
-    # Validate backend-controlled scope once when tools are
-    # created.
-    # --------------------------------------------------------
-
     _validate_scope(
         scope
     )
 
-    user_id = scope["user_id"]
+    user_id = scope[
+        "user_id"
+    ]
 
     # ========================================================
     # Tool 1 — Search Memories
@@ -289,16 +532,13 @@ def create_tools(
         query: str,
     ):
         """
-        Search the user's saved memories using semantic search.
-
-        IMPORTANT:
-        The search scope is controlled entirely by the backend.
-
-        The LLM can provide only the search query.
-        It cannot provide user_id or memory_ids.
+        Search the user's saved memories.
         """
 
-        if not query or not query.strip():
+        if (
+            not query
+            or not query.strip()
+        ):
 
             return (
                 "No search query was provided.",
@@ -311,25 +551,25 @@ def create_tools(
             )
 
         # ----------------------------------------------------
-        # Convert backend scope into retrieval parameters.
+        # Determine selected-memory filter.
         # ----------------------------------------------------
 
         selected_memory_id = None
 
         if scope["scope_type"] == "memory":
 
-            memory_ids = (
-                scope["memory_ids"] or []
-            )
+            selected_memory_id = (
+                scope["memory_ids"] or [None]
+            )[0]
 
-            # V1 currently supports one selected memory.
-            # We deliberately keep the retrieval API compatible.
-            selected_memory_id = memory_ids[0]
+        # ----------------------------------------------------
+        # Retrieve only the maximum number of chunks needed.
+        # ----------------------------------------------------
 
         results = retrieve(
-            question=query,
+            question=query.strip(),
             user_id=user_id,
-            top_k=5,
+            top_k=MAX_MEMORY_SEARCH_CHUNKS,
             memory_id=selected_memory_id,
         )
 
@@ -346,12 +586,14 @@ def create_tools(
                 },
             )
 
-        # --------------------------------------------------------
-        # Grounding gate
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Grounding check.
+        # ----------------------------------------------------
 
-        grounded_results = get_grounded_results(
-            results
+        grounded_results = (
+            get_grounded_results(
+                results
+            )
         )
 
         if not grounded_results:
@@ -364,85 +606,26 @@ def create_tools(
                     "confidence": "Not found",
                     "distance": None,
                     "sources": [],
-                    "threshold": DEFAULT_DISTANCE_THRESHOLD,
+                    "threshold":
+                        DEFAULT_DISTANCE_THRESHOLD,
                 },
             )
 
-        strongest_distance = min(
-            distance
-            for _, distance in grounded_results
-        )
+        # ----------------------------------------------------
+        # Apply output limits AFTER grounding.
+        #
+        # This is important: do not change retrieval quality
+        # merely because the model receives less text.
+        # ----------------------------------------------------
 
-        if strongest_distance <= 0.4:
-            confidence = "High retrieval confidence"
-        else:
-            confidence = "Medium retrieval confidence"
-
-        # --------------------------------------------------------
-        # Only evidence is exposed to the LLM.
-        # --------------------------------------------------------
-
-        formatted_results = []
-        sources = []
-
-        for rank, (
-            document,
-            distance,
-        ) in enumerate(
+        (
+            formatted_results,
+            sources,
+            strongest_distance,
+        ) = _build_memory_evidence(
             grounded_results,
-            start=1,
-        ):
-
-            memory_id_value = document.metadata[
-                "memory_id"
-            ]
-
-            # ------------------------------------------------
-            # Defense-in-depth scope check.
-            #
-            # Even though retrieve() already filters by
-            # user_id/memory_id, verify the returned memory
-            # against the authorization scope before exposing
-            # it to the model.
-            # ------------------------------------------------
-
-            if not _is_memory_allowed(
-                scope,
-                memory_id_value,
-            ):
-                continue
-
-            memory_type = document.metadata[
-                "memory_type"
-            ]
-
-            chunk_index = document.metadata[
-                "chunk_index"
-            ]
-
-            formatted_results.append(
-                f"""
-Evidence {rank}
-
-Content:
-{document.page_content}
-""".strip()
-            )
-
-            sources.append(
-                {
-                    "memory_id": memory_id_value,
-                    "memory_type": memory_type,
-                    "chunk_index": int(chunk_index),
-                    "distance": float(distance),
-                }
-            )
-
-        # --------------------------------------------------------
-        # Defense-in-depth:
-        # if retrieval returned results but none survived the
-        # authorization check, do not expose them.
-        # --------------------------------------------------------
+            scope,
+        )
 
         if not formatted_results:
 
@@ -457,16 +640,48 @@ Content:
                 },
             )
 
+        # ----------------------------------------------------
+        # Confidence is calculated from the original grounded
+        # retrieval score, not the truncated text.
+        # ----------------------------------------------------
+
+        if strongest_distance <= 0.4:
+
+            confidence = (
+                "High retrieval confidence"
+            )
+
+        else:
+
+            confidence = (
+                "Medium retrieval confidence"
+            )
+
         artifact = {
             "grounded": True,
             "confidence": confidence,
-            "distance": float(strongest_distance),
-            "threshold": DEFAULT_DISTANCE_THRESHOLD,
+            "distance": float(
+                strongest_distance
+            ),
+            "threshold":
+                DEFAULT_DISTANCE_THRESHOLD,
             "sources": sources,
+
+            # Useful for Phase 0.2 observability/debugging.
+            "limits": {
+                "max_chunks":
+                    MAX_MEMORY_SEARCH_CHUNKS,
+                "max_chars_per_chunk":
+                    MAX_CHARS_PER_MEMORY_CHUNK,
+                "max_total_chars":
+                    MAX_MEMORY_EVIDENCE_CHARS,
+            },
         }
 
         return (
-            "\n\n".join(formatted_results),
+            "\n\n".join(
+                formatted_results
+            ),
             artifact,
         )
 
@@ -479,10 +694,7 @@ Content:
         memory_id_requested: str,
     ) -> str:
         """
-        Get detailed information about one saved memory.
-
-        The requested memory ID comes from the LLM, but the
-        backend-controlled scope decides whether access is allowed.
+        Get bounded details about one saved memory.
         """
 
         if (
@@ -499,7 +711,7 @@ Content:
         )
 
         # ----------------------------------------------------
-        # Scope security
+        # Scope security.
         # ----------------------------------------------------
 
         if not _is_memory_allowed(
@@ -512,10 +724,7 @@ Content:
             )
 
         # ----------------------------------------------------
-        # Ownership security
-        #
-        # Even in global scope, the database lookup is always
-        # performed with the backend-controlled user_id.
+        # User ownership is always enforced at DB level.
         # ----------------------------------------------------
 
         memory = get_memory_record(
@@ -528,6 +737,14 @@ Content:
             return (
                 "Memory not found."
             )
+
+        extracted_text = _truncate_text(
+            memory.get(
+                "extracted_text",
+                "",
+            ),
+            MAX_MEMORY_DETAIL_CHARS,
+        )
 
         return f"""
 Memory ID:
@@ -546,7 +763,7 @@ Summary:
 {memory["summary"] or "No summary available."}
 
 Extracted Content:
-{memory["extracted_text"]}
+{extracted_text}
 """.strip()
 
     # ========================================================
@@ -557,12 +774,7 @@ Extracted Content:
     def calculate(
         expression: str,
     ) -> str:
-        """
-        Calculate a mathematical expression.
-
-        Use this tool when arithmetic is required.
-        Do not perform complex arithmetic manually.
-        """
+        """Calculate a mathematical expression."""
 
         try:
 
@@ -599,8 +811,6 @@ Extracted Content:
     ) -> str:
         """
         Search the internet for current or external information.
-
-        Web search does not receive or modify memory scope.
         """
 
         if not settings.TAVILY_API_KEY:
@@ -610,7 +820,10 @@ Extracted Content:
                 "TAVILY_API_KEY is missing."
             )
 
-        if not query or not query.strip():
+        if (
+            not query
+            or not query.strip()
+        ):
 
             return (
                 "Web search query cannot be empty."
@@ -620,12 +833,17 @@ Extracted Content:
 
             results = tavily_tool.invoke(
                 {
-                    "query": query
+                    "query": query.strip()
                 }
             )
 
-            return str(
-                results
+            # ------------------------------------------------
+            # Hard cap on external tool output.
+            # ------------------------------------------------
+
+            return _truncate_text(
+                str(results),
+                MAX_WEB_RESULT_CHARS,
             )
 
         except Exception as error:
