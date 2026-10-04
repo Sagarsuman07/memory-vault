@@ -12,7 +12,9 @@ from langgraph.prebuilt import (
     tools_condition,
 )
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite import (
+    SqliteSaver,
+)
 
 from agent.state import (
     AgentState,
@@ -35,7 +37,7 @@ from database.repositories import (
 
 
 # ============================================================
-# Persistent LangGraph Checkpointer
+# Persistent Checkpointer
 # ============================================================
 
 _checkpoint_connection = sqlite3.connect(
@@ -128,15 +130,6 @@ def build_memory_scope(
     user_id: str,
     memory_id: str | None = None,
 ) -> MemoryScope:
-    """
-    Build the backend-controlled memory authorization scope.
-
-    IMPORTANT:
-    - user_id comes from the application/session.
-    - memory_id comes from the application/UI selection.
-    - the LLM never creates this object.
-    - selected memory ownership is validated here.
-    """
 
     if not user_id or not user_id.strip():
 
@@ -158,10 +151,6 @@ def build_memory_scope(
             "memory_ids": None,
         }
 
-    # --------------------------------------------------------
-    # Validate selected memory ID
-    # --------------------------------------------------------
-
     memory_id = memory_id.strip()
 
     if not memory_id:
@@ -171,8 +160,7 @@ def build_memory_scope(
         )
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # Validate ownership BEFORE constructing the graph.
+    # Validate ownership
     # --------------------------------------------------------
 
     memory = get_memory_record(
@@ -205,42 +193,26 @@ def build_agent_graph(
     memory_id: str | None = None,
 ):
 
-    # --------------------------------------------------------
-    # Build and validate backend-controlled scope.
-    # --------------------------------------------------------
-
     memory_scope = build_memory_scope(
         user_id=user_id,
         memory_id=memory_id,
     )
 
-    # ========================================================
-    # Create tools for current backend scope
-    # ========================================================
-
     tools = create_tools(
-        scope=memory_scope,
+        scope=memory_scope
     )
-
-    # ========================================================
-    # Create Tool Node
-    # ========================================================
 
     tool_node = ToolNode(
         tools
     )
 
-    # ========================================================
-    # Create State Graph
-    # ========================================================
-
     graph_builder = StateGraph(
         AgentState
     )
 
-    # ========================================================
-    # Add Nodes
-    # ========================================================
+    # --------------------------------------------------------
+    # Nodes
+    # --------------------------------------------------------
 
     graph_builder.add_node(
         "understand_query",
@@ -262,27 +234,19 @@ def build_agent_graph(
         answer_node,
     )
 
-    # ========================================================
-    # START → Understand Query
-    # ========================================================
+    # --------------------------------------------------------
+    # Edges
+    # --------------------------------------------------------
 
     graph_builder.add_edge(
         START,
         "understand_query",
     )
 
-    # ========================================================
-    # Understand Query → Agent
-    # ========================================================
-
     graph_builder.add_edge(
         "understand_query",
         "agent",
     )
-
-    # ========================================================
-    # Agent → Tool or Answer
-    # ========================================================
 
     graph_builder.add_conditional_edges(
         "agent",
@@ -293,27 +257,15 @@ def build_agent_graph(
         },
     )
 
-    # ========================================================
-    # Tool → Agent
-    # ========================================================
-
     graph_builder.add_edge(
         "tools",
         "agent",
     )
 
-    # ========================================================
-    # Answer → END
-    # ========================================================
-
     graph_builder.add_edge(
         "answer",
         END,
     )
-
-    # ========================================================
-    # Compile with Checkpointer
-    # ========================================================
 
     return graph_builder.compile(
         checkpointer=_checkpointer
@@ -321,7 +273,7 @@ def build_agent_graph(
 
 
 # ============================================================
-# Run LangGraph Agent
+# Run Agent
 # ============================================================
 
 def run_langgraph_agent(
@@ -352,127 +304,150 @@ def run_langgraph_agent(
             "Memory ID cannot be empty."
         )
 
-    # ========================================================
-    # Validate thread ownership
-    # ========================================================
-
     validate_thread_id(
         user_id=user_id,
         thread_id=thread_id,
     )
-
-    # ========================================================
-    # Build and validate backend scope
-    #
-    # This also validates selected-memory ownership.
-    # ========================================================
 
     memory_scope = build_memory_scope(
         user_id=user_id,
         memory_id=memory_id,
     )
 
-    # ========================================================
-    # Build graph
-    # ========================================================
-
     graph = build_agent_graph(
         user_id=user_id,
         memory_id=memory_id,
     )
-
-    # ========================================================
-    # New message
-    #
-    # The checkpointer automatically restores the previous
-    # messages belonging to this thread.
-    # ========================================================
 
     input_state = {
 
         "messages": [
             {
                 "role": "user",
-                "content": question.strip(),
+                "content":
+                    question.strip(),
             }
         ],
 
-        "user_id": user_id,
+        "user_id":
+            user_id,
 
-        "question": question.strip(),
+        "question":
+            question.strip(),
 
-        "scope": (
-            "memory"
-            if memory_id is not None
-            else "all"
-        ),
+        "scope":
+            (
+                "memory"
+                if memory_id is not None
+                else "all"
+            ),
 
-        "memory_id": memory_id,
+        "memory_id":
+            memory_id,
 
-        # ----------------------------------------------------
-        # Formal backend-controlled scope.
-        # ----------------------------------------------------
+        "memory_scope":
+            memory_scope,
 
-        "memory_scope": memory_scope,
+        "final_answer":
+            "",
 
-        "final_answer": "",
+        "retrieval_sources":
+            [],
 
-        "tool_calls": [],
+        "tool_calls":
+            [],
+
+        "tool_call_count":
+            0,
+
+        "tool_limit_reached":
+            False,
+
+        "blocked_tool_calls":
+            [],
+
+        "agent_has_tool_calls":
+            False,
     }
-
-    # ========================================================
-    # Thread configuration
-    # ========================================================
 
     config = {
         "configurable": {
-            "thread_id": thread_id,
+            "thread_id":
+                thread_id,
         }
     }
-
-    # ========================================================
-    # Execute graph
-    # ========================================================
 
     result = graph.invoke(
         input_state,
         config,
     )
 
-    # ========================================================
-    # Return result
-    # ========================================================
-
     return {
+        "answer":
+            result.get(
+                "final_answer",
+                "",
+            ),
 
-        "answer": result.get(
-            "final_answer",
-            "",
-        ),
+        "tool_calls":
+            result.get(
+                "tool_calls",
+                [],
+            ),
 
-        "tool_calls": result.get(
-            "tool_calls",
-            [],
-        ),
+        "messages":
+            result.get(
+                "messages",
+                [],
+            ),
 
-        "messages": result.get(
-            "messages",
-            [],
-        ),
+        "thread_id":
+            thread_id,
 
-        "thread_id": thread_id,
+        "scope":
+            (
+                "memory"
+                if memory_id is not None
+                else "all"
+            ),
 
-        "scope": (
-            "memory"
-            if memory_id is not None
-            else "all"
-        ),
+        "memory_id":
+            memory_id,
 
-        "memory_id": memory_id,
+        "memory_scope":
+            memory_scope,
 
-        # Useful for application-level debugging/testing.
-        # This is backend-generated, not model-generated.
-        "memory_scope": memory_scope,
+        # IMPORTANT:
+        # Chat UI should use this directly.
+        "sources":
+            result.get(
+                "retrieval_sources",
+                [],
+            ),
+
+        "retrieval_sources":
+            result.get(
+                "retrieval_sources",
+                [],
+            ),
+
+        "tool_call_count":
+            result.get(
+                "tool_call_count",
+                0,
+            ),
+
+        "tool_limit_reached":
+            result.get(
+                "tool_limit_reached",
+                False,
+            ),
+
+        "blocked_tool_calls":
+            result.get(
+                "blocked_tool_calls",
+                [],
+            ),
     }
 
 
@@ -496,7 +471,8 @@ def get_thread_state(
 
     config = {
         "configurable": {
-            "thread_id": thread_id,
+            "thread_id":
+                thread_id,
         }
     }
 
@@ -506,7 +482,7 @@ def get_thread_state(
 
 
 # ============================================================
-# Get Conversation History
+# Conversation History
 # ============================================================
 
 def get_conversation_history(
@@ -525,12 +501,6 @@ def get_conversation_history(
 
     conversations = []
 
-    # ========================================================
-    # Read saved checkpoints
-    #
-    # Each conversation has its own thread_id.
-    # ========================================================
-
     try:
 
         checkpoint_items = list(
@@ -546,10 +516,6 @@ def get_conversation_history(
             "Unable to load conversation history."
         ) from error
 
-    # ========================================================
-    # Keep unique thread IDs
-    # ========================================================
-
     thread_ids = []
 
     for item in checkpoint_items:
@@ -561,7 +527,7 @@ def get_conversation_history(
             configurable = (
                 config.get(
                     "configurable",
-                    {}
+                    {},
                 )
             )
 
@@ -578,11 +544,6 @@ def get_conversation_history(
         if not thread_id:
             continue
 
-        # ====================================================
-        # Security:
-        # Only current user's conversations.
-        # ====================================================
-
         if not thread_id.startswith(
             user_prefix
         ):
@@ -593,10 +554,6 @@ def get_conversation_history(
             thread_ids.append(
                 thread_id
             )
-
-    # ========================================================
-    # Read state for every conversation
-    # ========================================================
 
     for thread_id in thread_ids:
 
@@ -621,21 +578,16 @@ def get_conversation_history(
             if not messages:
                 continue
 
-            # =================================================
-            # Find first human/user question
-            # =================================================
-
             first_question = None
 
             for message in messages:
 
-                message_type = getattr(
+                if getattr(
                     message,
                     "type",
                     "",
-                )
+                ) != "human":
 
-                if message_type != "human":
                     continue
 
                 content = getattr(
@@ -659,46 +611,42 @@ def get_conversation_history(
 
                 if content:
 
-                    first_question = content
-                    break
+                    first_question = (
+                        content
+                    )
 
-            # =================================================
-            # Ignore threads that don't contain a question.
-            # =================================================
+                    break
 
             if not first_question:
                 continue
 
-            scope = values.get(
-                "scope",
-                "all",
-            )
-
-            memory_id = values.get(
-                "memory_id"
-            )
-
             conversations.append(
                 {
-                    "thread_id": thread_id,
-                    "title": first_question,
-                    "scope": scope,
-                    "memory_id": memory_id,
-                    "message_count": len(
-                        messages
-                    ),
+                    "thread_id":
+                        thread_id,
+
+                    "title":
+                        first_question,
+
+                    "scope":
+                        values.get(
+                            "scope",
+                            "all",
+                        ),
+
+                    "memory_id":
+                        values.get(
+                            "memory_id"
+                        ),
+
+                    "message_count":
+                        len(messages),
                 }
             )
 
         except Exception:
 
-            # One corrupted/unreadable thread should not
-            # prevent the remaining history from loading.
             continue
-
-    # ========================================================
-    # Newest conversations first
-    # ========================================================
 
     conversations.reverse()
 

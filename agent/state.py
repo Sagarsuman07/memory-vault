@@ -13,9 +13,9 @@ class MemoryScope(TypedDict):
     Backend-controlled authorization scope for memory access.
 
     IMPORTANT:
-    - This object is created by the application.
-    - The LLM never supplies or modifies these values.
-    - Tools use this scope to enforce user/memory isolation.
+    - Created by the application.
+    - Never created or modified by the LLM.
+    - Used by tools to enforce memory isolation.
     """
 
     user_id: str
@@ -24,8 +24,8 @@ class MemoryScope(TypedDict):
     # "memory" -> only memory_ids belonging to user_id
     scope_type: str
 
-    # None means all memories for the user.
-    # Otherwise only these memory IDs are authorized.
+    # None for global scope.
+    # List of authorized memory IDs for memory scope.
     memory_ids: list[str] | None
 
 
@@ -34,51 +34,79 @@ class MemoryScope(TypedDict):
 # ============================================================
 
 class AgentState(TypedDict):
+
+    # ========================================================
+    # Conversation
+    # ========================================================
+
     messages: Annotated[
         list,
         add_messages,
     ]
 
-    # --------------------------------------------------------
-    # Current authenticated/application user.
-    # --------------------------------------------------------
+    # ========================================================
+    # Request Information
+    # ========================================================
 
     user_id: str
 
-    # --------------------------------------------------------
-    # Current question.
-    # --------------------------------------------------------
-
     question: str
-
-    # --------------------------------------------------------
-    # Backward-compatible scope representation.
-    #
-    # Existing UI/history code uses these fields, so we keep
-    # them during Phase 0.1 instead of unnecessarily changing
-    # the rest of the application.
-    # --------------------------------------------------------
 
     # "all" or "memory"
     scope: str
 
-    # Selected memory when scope == "memory".
+    # Selected memory when scope == "memory"
     memory_id: str | None
 
-    # --------------------------------------------------------
-    # Formal backend-controlled authorization scope.
-    # --------------------------------------------------------
-
+    # Backend-controlled authorization scope
     memory_scope: MemoryScope
 
-    # --------------------------------------------------------
-    # Final response.
-    # --------------------------------------------------------
+    # ========================================================
+    # Final Answer
+    # ========================================================
 
     final_answer: str
 
-    # --------------------------------------------------------
-    # Tool execution trace.
-    # --------------------------------------------------------
+    # ========================================================
+    # Retrieval Sources
+    # ========================================================
 
+    # Memory-level sources actually returned by
+    # search_memories.
+    #
+    # One entry per memory.
+    #
+    # Example:
+    #
+    # [
+    #     {
+    #         "memory_id": "...",
+    #         "memory_type": "document",
+    #         "title": "Hotel Booking",
+    #         "distance": 0.21
+    #     }
+    # ]
+    retrieval_sources: list
+
+    # ========================================================
+    # Agent Routing
+    # ========================================================
+
+    # True when the latest agent response requested tools.
+    agent_has_tool_calls: bool
+
+    # ========================================================
+    # Tool Tracking
+    # ========================================================
+
+    # All requested tool calls.
     tool_calls: list
+
+    # Number of tools actually executed.
+    tool_call_count: int
+
+    # True if a tool call was blocked.
+    tool_limit_reached: bool
+
+    # Tool calls requested but not executed.
+    blocked_tool_calls: list

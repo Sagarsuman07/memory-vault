@@ -533,17 +533,206 @@ def parse_grounding_signal_from_tool_content(
     }
 
 
+def _get_used_memory_ids_from_answer(
+    message,
+):
+    """
+    Read the memory IDs selected by answer_node.
+
+    answer_node stores them in:
+        AIMessage.additional_kwargs["used_memory_ids"]
+    """
+
+    additional_kwargs = getattr(
+        message,
+        "additional_kwargs",
+        None,
+    )
+
+    if not isinstance(
+        additional_kwargs,
+        dict,
+    ):
+        return []
+
+    raw_ids = additional_kwargs.get(
+        "used_memory_ids",
+        [],
+    )
+
+    if not isinstance(
+        raw_ids,
+        (list, tuple, set),
+    ):
+        return []
+
+    used_memory_ids = []
+
+    for memory_id in raw_ids:
+
+        if memory_id is None:
+            continue
+
+        memory_id = str(
+            memory_id
+        ).strip()
+
+        if not memory_id:
+            continue
+
+        if memory_id not in used_memory_ids:
+
+            used_memory_ids.append(
+                memory_id
+            )
+
+    return used_memory_ids
+
+
+def _filter_signal_sources(
+    signal,
+    used_memory_ids,
+):
+    """
+    Filter the candidate retrieval sources so the UI shows
+    only the memories actually used by answer_node.
+    """
+
+    if not signal:
+        return None
+
+    if not used_memory_ids:
+        return {
+            **signal,
+            "sources": [],
+        }
+
+    used_ids = set(
+        used_memory_ids
+    )
+
+    filtered_sources = []
+    seen_memory_ids = set()
+
+    for source in signal.get(
+        "sources",
+        [],
+    ):
+
+        if not isinstance(
+            source,
+            dict,
+        ):
+            continue
+
+        memory_id = source.get(
+            "memory_id"
+        )
+
+        if not memory_id:
+            continue
+
+        memory_id = str(
+            memory_id
+        ).strip()
+
+        if memory_id not in used_ids:
+            continue
+
+        # One UI source per memory.
+        if memory_id in seen_memory_ids:
+            continue
+
+        seen_memory_ids.add(
+            memory_id
+        )
+
+        filtered_sources.append(
+            source
+        )
+
+    return {
+        **signal,
+        "sources": filtered_sources,
+    }
+
+
 def get_tool_grounding_signal_for_answer(
     messages,
     assistant_index: int,
 ):
     """
-    Find the search_memories ToolMessage associated with the
-    current assistant answer.
+    Find the search_memories results associated with the
+    current final answer.
 
-    Prefer ToolMessage.artifact. Fall back to the old content
-    parser for historical conversations.
+    The FINAL answer node decides which memories were actually
+    used. The UI displays only those memories.
+
+    Multiple search_memories calls are supported.
     """
+
+    if (
+        messages is None
+        or assistant_index is None
+        or assistant_index < 0
+        or assistant_index >= len(messages)
+    ):
+        return None
+
+    # ========================================================
+    # 1. Read source IDs selected by answer_node.
+    # ========================================================
+
+    answer_message = messages[
+        assistant_index
+    ]
+
+    additional_kwargs = getattr(
+        answer_message,
+        "additional_kwargs",
+        {},
+    )
+
+    if not isinstance(
+        additional_kwargs,
+        dict,
+    ):
+        additional_kwargs = {}
+
+    used_memory_ids = (
+        additional_kwargs.get(
+            "used_memory_ids",
+            [],
+        )
+    )
+
+    if not isinstance(
+        used_memory_ids,
+        (list, tuple, set),
+    ):
+        used_memory_ids = []
+
+    used_memory_ids = [
+        str(memory_id).strip()
+        for memory_id in used_memory_ids
+        if memory_id
+        and str(memory_id).strip()
+    ]
+
+    used_memory_id_set = set(
+        used_memory_ids
+    )
+
+    # ========================================================
+    # 2. Collect ALL search_memories results belonging to
+    #    this answer.
+    # ========================================================
+
+    all_sources = {}
+
+    confidence = "Grounded"
+    strongest_distance = None
+    found_grounded_result = False
 
     for index in range(
         assistant_index - 1,
@@ -557,12 +746,12 @@ def get_tool_grounding_signal_for_answer(
             message
         )
 
+        # Stop when we reach the user question that generated
+        # this answer.
         if message_type == "human":
-
             break
 
         if message_type != "tool":
-
             continue
 
         tool_name = getattr(
@@ -572,10 +761,12 @@ def get_tool_grounding_signal_for_answer(
         )
 
         if tool_name != "search_memories":
-
             continue
 
-        # New format: metadata is stored separately.
+        # ----------------------------------------------------
+        # New artifact-based metadata.
+        # ----------------------------------------------------
+
         artifact_signal = (
             parse_grounding_signal_from_artifact(
                 getattr(
@@ -588,9 +779,116 @@ def get_tool_grounding_signal_for_answer(
 
         if artifact_signal is not None:
 
-            return artifact_signal
+            if not artifact_signal.get(
+                "grounded",
+                False,
+            ):
+                continue
 
-        # Backward compatibility for old persisted messages.
+            found_grounded_result = True
+
+            if artifact_signal.get(
+                "confidence"
+            ):
+                confidence = (
+                    artifact_signal.get(
+                        "confidence"
+                    )
+                )
+
+            distance = artifact_signal.get(
+                "distance"
+            )
+
+            if isinstance(
+                distance,
+                (int, float),
+            ):
+                if (
+                    strongest_distance is None
+                    or distance < strongest_distance
+                ):
+                    strongest_distance = distance
+
+            for source in artifact_signal.get(
+                "sources",
+                [],
+            ):
+
+                if not isinstance(
+                    source,
+                    dict,
+                ):
+                    continue
+
+                memory_id = source.get(
+                    "memory_id"
+                )
+
+                if not memory_id:
+                    continue
+
+                memory_id = str(
+                    memory_id
+                ).strip()
+
+                # ------------------------------------------------
+                # Only memories explicitly selected by answer_node.
+                # ------------------------------------------------
+
+                if (
+                    used_memory_id_set
+                    and memory_id
+                    not in used_memory_id_set
+                ):
+                    continue
+
+                # One UI source per memory.
+                if memory_id not in all_sources:
+
+                    all_sources[
+                        memory_id
+                    ] = dict(
+                        source
+                    )
+
+                else:
+
+                    existing_distance = (
+                        all_sources[
+                            memory_id
+                        ].get(
+                            "distance"
+                        )
+                    )
+
+                    new_distance = source.get(
+                        "distance"
+                    )
+
+                    if (
+                        isinstance(
+                            new_distance,
+                            (int, float),
+                        )
+                        and (
+                            existing_distance is None
+                            or new_distance
+                            < existing_distance
+                        )
+                    ):
+                        all_sources[
+                            memory_id
+                        ]["distance"] = (
+                            new_distance
+                        )
+
+            continue
+
+        # ----------------------------------------------------
+        # Backward-compatible old format.
+        # ----------------------------------------------------
+
         content_signal = (
             parse_grounding_signal_from_tool_content(
                 get_message_content(
@@ -599,12 +897,74 @@ def get_tool_grounding_signal_for_answer(
             )
         )
 
-        if content_signal is not None:
+        if content_signal is None:
+            continue
 
-            return content_signal
+        if not content_signal.get(
+            "grounded",
+            False,
+        ):
+            continue
 
-    return None
+        found_grounded_result = True
 
+        for source in content_signal.get(
+            "sources",
+            [],
+        ):
+
+            if not isinstance(
+                source,
+                dict,
+            ):
+                continue
+
+            memory_id = source.get(
+                "memory_id"
+            )
+
+            if not memory_id:
+                continue
+
+            memory_id = str(
+                memory_id
+            ).strip()
+
+            if (
+                used_memory_id_set
+                and memory_id
+                not in used_memory_id_set
+            ):
+                continue
+
+            if memory_id not in all_sources:
+
+                all_sources[
+                    memory_id
+                ] = dict(
+                    source
+                )
+
+    # ========================================================
+    # 3. No grounded result.
+    # ========================================================
+
+    if not found_grounded_result:
+
+        return None
+
+    # ========================================================
+    # 4. Return only final-LLM-selected memories.
+    # ========================================================
+
+    return {
+        "grounded": True,
+        "confidence": confidence,
+        "sources": list(
+            all_sources.values()
+        ),
+        "distance": strongest_distance,
+    }
 
 def get_retrieval_signal(
     question: str,
@@ -1919,263 +2279,380 @@ except Exception as error:
 # Conversation Messages
 # ============================================================
 
-for index, message in enumerate(
+def get_final_ai_message_for_turn(
+    messages,
+    human_index,
+):
+    """
+    Return the last non-empty AI message belonging to the
+    current user turn.
+
+    A user turn ends when the next human message starts.
+
+    This is important because LangGraph may persist:
+        - tool-calling AI messages
+        - tool messages
+        - final AI answer message
+
+    Only the final non-empty AI message should be displayed
+    to the user.
+    """
+
+    final_ai_index = None
+
+    for index in range(
+        human_index + 1,
+        len(messages),
+    ):
+        message_type = get_message_type(
+            messages[index]
+        )
+
+        # Stop when the next user message begins.
+        if message_type == "human":
+            break
+
+        if message_type != "ai":
+            continue
+
+        content = get_message_content(
+            messages[index]
+        ).strip()
+
+        if not content:
+            continue
+
+        # Keep updating this so the LAST non-empty AI
+        # message becomes the final answer.
+        final_ai_index = index
+
+    if final_ai_index is None:
+        return None
+
+    return (
+        final_ai_index,
+        messages[final_ai_index],
+    )
+
+
+def render_sources(
+    signal,
+    assistant_message=None,
+    assistant_index=None,
+):
+    """
+    Render ONLY the memory sources actually used by
+    answer_node.
+
+    Sources are displayed at memory level.
+    Duplicate memory IDs are removed as a final UI safeguard.
+    """
+
+    sources = []
+
+    # --------------------------------------------------------
+    # Preferred source:
+    # answer_node's retrieval_sources
+    # --------------------------------------------------------
+
+    if signal:
+
+        sources = list(
+            signal.get(
+                "sources",
+                [],
+            )
+        )
+
+    # --------------------------------------------------------
+    # Nothing to display.
+    # --------------------------------------------------------
+
+    if not sources:
+        return
+
+    # --------------------------------------------------------
+    # Final UI-level deduplication.
+    #
+    # This is only a safety net. The actual source selection
+    # has already happened inside answer_node.
+    # --------------------------------------------------------
+
+    unique_sources = []
+
+    seen_memory_ids = set()
+
+    for source in sources:
+
+        if not isinstance(
+            source,
+            dict,
+        ):
+            continue
+
+        memory_id = source.get(
+            "memory_id"
+        )
+
+        if not memory_id:
+            continue
+
+        if memory_id in seen_memory_ids:
+            continue
+
+        seen_memory_ids.add(
+            memory_id
+        )
+
+        unique_sources.append(
+            source
+        )
+
+    if not unique_sources:
+        return
+
+    # --------------------------------------------------------
+    # Sources UI
+    # --------------------------------------------------------
+
+    with st.expander(
+        "Sources"
+    ):
+
+        for source_index, source in enumerate(
+            unique_sources
+        ):
+
+            source_memory_id = source.get(
+                "memory_id"
+            )
+
+            source_title = (
+                source.get(
+                    "title"
+                )
+                or source_memory_id
+                or "Untitled Memory"
+            )
+
+            source_type = (
+                source.get(
+                    "memory_type"
+                )
+                or "unknown"
+            )
+
+            source_type = str(
+                source_type
+            ).capitalize()
+
+            source_col1, source_col2, source_col3 = (
+                st.columns(
+                    [0.70, 0.18, 0.12],
+                    vertical_alignment="center",
+                )
+            )
+
+            # ------------------------------------------------
+            # Source title
+            # ------------------------------------------------
+
+            with source_col1:
+
+                safe_title = html.escape(
+                    str(source_title),
+                    quote=True,
+                )
+
+                st.markdown(
+                    f'<div title="{safe_title}" '
+                    'style="'
+                    'white-space: nowrap; '
+                    'overflow: hidden; '
+                    'text-overflow: ellipsis; '
+                    'width: 100%; '
+                    'line-height: 2rem;'
+                    '">'
+                    f"{safe_title}"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ------------------------------------------------
+            # Source type
+            # ------------------------------------------------
+
+            with source_col2:
+
+                st.caption(
+                    source_type
+                )
+
+            # ------------------------------------------------
+            # Open memory
+            # ------------------------------------------------
+
+            with source_col3:
+
+                if st.button(
+                    "Open",
+                    key=(
+                        f"source_open_"
+                        f"{assistant_index}_"
+                        f"{source_index}_"
+                        f"{source_memory_id}"
+                    ),
+                    use_container_width=True,
+                ):
+
+                    open_memory_from_source(
+                        source_memory_id
+                    )
+
+# ============================================================
+# Render Conversation
+# ============================================================
+
+index = 0
+
+while index < len(
     conversation_messages
 ):
 
-    message_type = (
-        get_message_type(
-            message
-        )
+    message = conversation_messages[
+        index
+    ]
+
+    message_type = get_message_type(
+        message
     )
 
     # ========================================================
     # User Message
     # ========================================================
 
-    if message_type == "human":
+    if message_type != "human":
+
+        index += 1
+        continue
+
+    question = get_message_content(
+        message
+    ).strip()
+
+    if question:
 
         with st.chat_message(
             "user"
         ):
 
             st.write(
-                get_message_content(
-                    message
-                )
+                question
             )
 
+    # ========================================================
+    # Find ONLY the final AI response
+    # for this user turn.
+    # ========================================================
+
+    final_ai = (
+        get_final_ai_message_for_turn(
+            conversation_messages,
+            index,
+        )
+    )
+
+    if final_ai is None:
+
+        index += 1
+        continue
+
+    assistant_index, assistant_message = (
+        final_ai
+    )
+
+    content = get_message_content(
+        assistant_message
+    ).strip()
+
+    if not content:
+
+        index += 1
+        continue
 
     # ========================================================
-    # Assistant Message
+    # Final Assistant Response
     # ========================================================
 
-    elif message_type == "ai":
+    with st.chat_message(
+        "assistant"
+    ):
 
-        content = (
-            get_message_content(
-                message
+        st.markdown(
+            content
+        )
+
+        # ----------------------------------------------------
+        # Retrieval / grounding information
+        # ----------------------------------------------------
+
+        signal = (
+            get_or_create_retrieval_signal(
+                thread_id=thread_id,
+                question=question,
+                memory_id=(
+                    st.session_state.chat_memory_id
+                    if (
+                        st.session_state.chat_scope
+                        == "memory"
+                    )
+                    else None
+                ),
+                messages=conversation_messages,
+                assistant_index=assistant_index,
             )
         )
 
-        # Tool-calling intermediate AI messages can
-        # have empty user-facing content.
+        # ----------------------------------------------------
+        # Grounded response
+        # ----------------------------------------------------
 
-        if not content.strip():
-
-            continue
-
-        with st.chat_message(
-            "assistant"
+        if signal.get(
+            "grounded",
+            False,
         ):
 
-            st.write(
-                content
+            st.caption(
+                "Confidence: "
+                f"{signal.get('confidence', 'Grounded')}"
             )
 
-            # ------------------------------------------------
-            # Find associated question
-            # ------------------------------------------------
-
-            question = (
-                get_previous_human_question(
-                    conversation_messages,
-                    index,
-                )
+            render_sources(
+                signal=signal,
+                assistant_index=assistant_index,
             )
 
-            if not question:
+        # ----------------------------------------------------
+        # Not found response
+        # ----------------------------------------------------
 
-                continue
+        elif (
+            NOT_FOUND_MESSAGE
+            in content
+        ):
 
-            # ------------------------------------------------
-            # IMPORTANT FIX
-            #
-            # Use the scope that belongs to this
-            # conversation, not a temporary UI selection.
-            #
-            # For an old conversation, its stored scope
-            # should be used whenever possible.
-            # ------------------------------------------------
-
-            conversation_scope = normalize_scope(
-                st.session_state.get(
-                    "chat_scope",
-                    "all",
-                )
+            st.caption(
+                "Not found"
             )
 
-            conversation_memory_id = (
-                st.session_state.get(
-                    "chat_memory_id"
-                )
-                if conversation_scope
-                == "memory"
-                else None
-            )
+    # ========================================================
+    # Move to the next user turn.
+    #
+    # We deliberately jump to the final AI message instead
+    # of processing intermediate tool/AI messages individually.
+    # ========================================================
 
-            # ------------------------------------------------
-            # Retrieval signal
-            #
-            # This uses the cache.
-            #
-            # Therefore loading history does NOT cause
-            # repeated retrieval for the same question
-            # once it has already been calculated.
-            # ------------------------------------------------
-
-            signal = (
-                get_or_create_retrieval_signal(
-                    thread_id=thread_id,
-                    question=question,
-                    memory_id=conversation_memory_id,
-                    messages=conversation_messages,
-                    assistant_index=index,
-                )
-            )
-
-            # ------------------------------------------------
-            # Grounded answer
-            # ------------------------------------------------
-
-            if signal["grounded"]:
-
-                st.caption(
-                    "Confidence: "
-                    f"{signal['confidence']}"
-                )
-
-                # ------------------------------------------------
-                # Sources
-                # ------------------------------------------------
-
-                if signal["sources"]:
-
-                    # ------------------------------------------------
-                    # Deduplicate sources by memory_id.
-                    #
-                    # Retrieval happens at chunk level, but the
-                    # Chat UI displays sources at memory level.
-                    # ------------------------------------------------
-
-                    unique_sources = []
-                    seen_memory_ids = set()
-
-                    for source in signal["sources"]:
-
-                        memory_id = source.get(
-                            "memory_id"
-                        )
-
-                        if not memory_id:
-                            continue
-
-                        if memory_id in seen_memory_ids:
-                            continue
-
-                        seen_memory_ids.add(
-                            memory_id
-                        )
-
-                        unique_sources.append(
-                            source
-                        )
-
-                    with st.expander(
-                        "Sources"
-                    ):
-
-                        # Keep every source compact and on one line.
-                        # Long titles use an ellipsis instead of wrapping.
-
-                        for source_index, source in enumerate(
-                            unique_sources
-                        ):
-
-                            source_memory_id = source.get(
-                                "memory_id"
-                            )
-
-                            source_title = (
-                                source.get("title")
-                                or source_memory_id
-                                or "Untitled Memory"
-                            )
-
-                            source_type = (
-                                source.get("memory_type")
-                                or "unknown"
-                            )
-
-                            source_type = (
-                                str(source_type).capitalize()
-                            )
-
-                            source_col1, source_col2, source_col3 = (
-                                st.columns(
-                                    [0.70, 0.18, 0.12],
-                                    vertical_alignment="center",
-                                )
-                            )
-
-                            with source_col1:
-
-                                safe_title = html.escape(
-                                    str(source_title),
-                                    quote=True,
-                                )
-
-                                st.markdown(
-                                    f'<div title="{safe_title}" '
-                                    'style="'
-                                    'white-space: nowrap; '
-                                    'overflow: hidden; '
-                                    'text-overflow: ellipsis; '
-                                    'width: 100%; '
-                                    'line-height: 2rem;'
-                                    '">'
-                                    f"{safe_title}"
-                                    "</div>",
-                                    unsafe_allow_html=True,
-                                )
-
-                            with source_col2:
-
-                                st.caption(
-                                    source_type
-                                )
-
-                            with source_col3:
-
-                                if st.button(
-                                    "Open",
-                                    key=(
-                                        f"source_open_"
-                                        f"{index}_"
-                                        f"{source_index}_"
-                                        f"{source_memory_id}"
-                                    ),
-                                    use_container_width=True,
-                                ):
-
-                                    open_memory_from_source(
-                                        source_memory_id
-                                    )
-            # ------------------------------------------------
-            # Not found
-            # ------------------------------------------------
-
-            else:
-
-                if (
-                    NOT_FOUND_MESSAGE
-                    in content
-                ):
-
-                    st.caption(
-                        "Not found"
-                    )
-
+    index = assistant_index + 1
 
 # ============================================================
 # Chat Input
