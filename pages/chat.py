@@ -662,13 +662,24 @@ def get_tool_grounding_signal_for_answer(
     assistant_index: int,
 ):
     """
-    Find the search_memories results associated with the
-    current final answer.
+    Build the source signal for one final answer.
 
-    The FINAL answer node decides which memories were actually
-    used. The UI displays only those memories.
+    Source selection authority:
+        answer_node
 
-    Multiple search_memories calls are supported.
+    The UI never decides which memory is relevant.
+
+    It only resolves the memory IDs selected by answer_node
+    into source metadata.
+
+    Sources can come from:
+
+    1. search_memories results in the current turn
+    2. historical search_memories results from an earlier turn
+
+    The second case is required when the current answer is
+    derived from conversation history instead of performing
+    another memory search.
     """
 
     if (
@@ -687,45 +698,28 @@ def get_tool_grounding_signal_for_answer(
         assistant_index
     ]
 
-    additional_kwargs = getattr(
-        answer_message,
-        "additional_kwargs",
-        {},
-    )
-
-    if not isinstance(
-        additional_kwargs,
-        dict,
-    ):
-        additional_kwargs = {}
-
     used_memory_ids = (
-        additional_kwargs.get(
-            "used_memory_ids",
-            [],
+        _get_used_memory_ids_from_answer(
+            answer_message
         )
     )
 
-    if not isinstance(
-        used_memory_ids,
-        (list, tuple, set),
-    ):
-        used_memory_ids = []
-
-    used_memory_ids = [
-        str(memory_id).strip()
-        for memory_id in used_memory_ids
-        if memory_id
-        and str(memory_id).strip()
-    ]
+    if not used_memory_ids:
+        return None
 
     used_memory_id_set = set(
         used_memory_ids
     )
 
     # ========================================================
-    # 2. Collect ALL search_memories results belonging to
-    #    this answer.
+    # 2. Collect source metadata from ALL search_memories
+    #    results in the conversation.
+    #
+    #    This is intentional.
+    #
+    #    A repeated question may not execute search_memories
+    #    again because the answer came from conversation
+    #    history.
     # ========================================================
 
     all_sources = {}
@@ -734,24 +728,12 @@ def get_tool_grounding_signal_for_answer(
     strongest_distance = None
     found_grounded_result = False
 
-    for index in range(
-        assistant_index - 1,
-        -1,
-        -1,
-    ):
+    for message in messages:
 
-        message = messages[index]
-
-        message_type = get_message_type(
-            message
-        )
-
-        # Stop when we reach the user question that generated
-        # this answer.
-        if message_type == "human":
-            break
-
-        if message_type != "tool":
+        if (
+            get_message_type(message)
+            != "tool"
+        ):
             continue
 
         tool_name = getattr(
@@ -787,17 +769,21 @@ def get_tool_grounding_signal_for_answer(
 
             found_grounded_result = True
 
-            if artifact_signal.get(
-                "confidence"
-            ):
+            artifact_confidence = (
+                artifact_signal.get(
+                    "confidence"
+                )
+            )
+
+            if artifact_confidence:
                 confidence = (
-                    artifact_signal.get(
-                        "confidence"
-                    )
+                    artifact_confidence
                 )
 
-            distance = artifact_signal.get(
-                "distance"
+            distance = (
+                artifact_signal.get(
+                    "distance"
+                )
             )
 
             if isinstance(
@@ -806,7 +792,8 @@ def get_tool_grounding_signal_for_answer(
             ):
                 if (
                     strongest_distance is None
-                    or distance < strongest_distance
+                    or distance
+                    < strongest_distance
                 ):
                     strongest_distance = distance
 
@@ -833,19 +820,22 @@ def get_tool_grounding_signal_for_answer(
                 ).strip()
 
                 # ------------------------------------------------
-                # Only memories explicitly selected by answer_node.
+                # CRITICAL:
+                #
+                # Only sources explicitly selected by
+                # answer_node are allowed into the UI.
                 # ------------------------------------------------
 
                 if (
-                    used_memory_id_set
-                    and memory_id
+                    memory_id
                     not in used_memory_id_set
                 ):
                     continue
 
-                # One UI source per memory.
-                if memory_id not in all_sources:
-
+                if (
+                    memory_id
+                    not in all_sources
+                ):
                     all_sources[
                         memory_id
                     ] = dict(
@@ -862,8 +852,10 @@ def get_tool_grounding_signal_for_answer(
                         )
                     )
 
-                    new_distance = source.get(
-                        "distance"
+                    new_distance = (
+                        source.get(
+                            "distance"
+                        )
                     )
 
                     if (
@@ -872,7 +864,8 @@ def get_tool_grounding_signal_for_answer(
                             (int, float),
                         )
                         and (
-                            existing_distance is None
+                            existing_distance
+                            is None
                             or new_distance
                             < existing_distance
                         )
@@ -931,14 +924,15 @@ def get_tool_grounding_signal_for_answer(
             ).strip()
 
             if (
-                used_memory_id_set
-                and memory_id
+                memory_id
                 not in used_memory_id_set
             ):
                 continue
 
-            if memory_id not in all_sources:
-
+            if (
+                memory_id
+                not in all_sources
+            ):
                 all_sources[
                     memory_id
                 ] = dict(
@@ -946,25 +940,108 @@ def get_tool_grounding_signal_for_answer(
                 )
 
     # ========================================================
-    # 3. No grounded result.
+    # 3. Resolve selected memory IDs directly from SQLite
+    #    if their historical search result is unavailable.
+    #
+    #    This is a fallback only.
     # ========================================================
 
-    if not found_grounded_result:
+    missing_memory_ids = [
+        memory_id
+        for memory_id in used_memory_ids
+        if memory_id
+        not in all_sources
+    ]
 
+    if missing_memory_ids:
+
+        try:
+
+            memories = list_memories(
+                USER_ID
+            )
+
+            memory_map = {
+                memory["id"]: memory
+                for memory in memories
+            }
+
+            for memory_id in (
+                missing_memory_ids
+            ):
+
+                memory = memory_map.get(
+                    memory_id
+                )
+
+                if memory is None:
+                    continue
+
+                all_sources[
+                    memory_id
+                ] = {
+                    "memory_id":
+                        memory_id,
+
+                    "memory_type":
+                        memory.get(
+                            "type"
+                        )
+                        or memory.get(
+                            "memory_type"
+                        )
+                        or "unknown",
+
+                    "title":
+                        memory.get(
+                            "title"
+                        )
+                        or memory_id,
+
+                    "distance":
+                        None,
+                }
+
+        except Exception:
+            pass
+
+    # ========================================================
+    # 4. If no selected source can be resolved, don't show
+    #    a Sources section.
+    # ========================================================
+
+    if not all_sources:
         return None
 
     # ========================================================
-    # 4. Return only final-LLM-selected memories.
+    # 5. Return ONLY answer_node-selected memories.
     # ========================================================
+
+    ordered_sources = []
+
+    for memory_id in used_memory_ids:
+
+        source = all_sources.get(
+            memory_id
+        )
+
+        if source is None:
+            continue
+
+        ordered_sources.append(
+            source
+        )
+
+    if not ordered_sources:
+        return None
 
     return {
         "grounded": True,
         "confidence": confidence,
-        "sources": list(
-            all_sources.values()
-        ),
+        "sources": ordered_sources,
         "distance": strongest_distance,
     }
+
 
 def get_retrieval_signal(
     question: str,

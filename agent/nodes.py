@@ -147,6 +147,24 @@ When information from a memory is actually used in the answer:
 - If multiple memories support different parts of the answer,
   select ALL of those memories.
 
+  CONVERSATION MEMORY PROVENANCE
+
+Previous assistant answers may contain memory provenance.
+
+If the current answer is based on a previous assistant
+answer that was originally grounded in one or more memories:
+
+- Treat those memory IDs as valid sources for the current answer.
+- Carry those exact memory IDs into USED_MEMORY_IDS.
+- Do not output USED_MEMORY_IDS: NONE merely because the
+  current turn did not perform a new search_memories call.
+
+If the current answer is purely conversational and does not
+depend on any stored memory, use:
+
+USED_MEMORY_IDS: NONE
+
+
 IMPORTANT:
 
 Do NOT select a memory merely because it was retrieved.
@@ -623,6 +641,92 @@ def _filter_used_sources(
     return filtered
 
 
+
+def _extract_conversation_memory_provenance(messages):
+    """
+    Extract memory provenance stored on previous final AI answers.
+
+    Previous answer_node calls store:
+
+        AIMessage.additional_kwargs["used_memory_ids"]
+
+    This allows a later answer to reuse information from
+    conversation history without losing the original memory source.
+    """
+
+    provenance = []
+
+    for message in messages:
+
+        if getattr(message, "type", "") != "ai":
+            continue
+
+        additional_kwargs = getattr(
+            message,
+            "additional_kwargs",
+            {},
+        )
+
+        if not isinstance(
+            additional_kwargs,
+            dict,
+        ):
+            continue
+
+        raw_ids = additional_kwargs.get(
+            "used_memory_ids",
+            [],
+        )
+
+        if not isinstance(
+            raw_ids,
+            (list, tuple, set),
+        ):
+            continue
+
+        memory_ids = []
+
+        for memory_id in raw_ids:
+
+            if memory_id is None:
+                continue
+
+            memory_id = str(
+                memory_id
+            ).strip()
+
+            if not memory_id:
+                continue
+
+            if memory_id not in memory_ids:
+                memory_ids.append(
+                    memory_id
+                )
+
+        if not memory_ids:
+            continue
+
+        answer_content = getattr(
+            message,
+            "content",
+            "",
+        )
+
+        if not answer_content:
+            continue
+
+        provenance.append(
+            {
+                "memory_ids": memory_ids,
+                "answer": str(
+                    answer_content
+                ),
+            }
+        )
+
+    return provenance
+
+
 # ============================================================
 # Build Final Answer Context
 # ============================================================
@@ -803,6 +907,64 @@ def _build_final_context(
                 block_parts
             )
         )
+
+    # --------------------------------------------------------
+    # Previous memory-grounded conversation answers.
+    #
+    # These are important when the current question can be
+    # answered from conversation history without performing
+    # another memory search.
+    # --------------------------------------------------------
+
+    conversation_provenance = (
+        _extract_conversation_memory_provenance(
+            messages
+        )
+    )
+
+    if conversation_provenance:
+
+        provenance_parts = [
+            "PREVIOUS MEMORY-GROUNDED ANSWERS:",
+            (
+                "The following previous assistant answers "
+                "were originally grounded in the listed "
+                "memory IDs."
+            ),
+            (
+                "If the current answer reuses information "
+                "from one of these answers, preserve the "
+                "corresponding memory IDs in "
+                "USED_MEMORY_IDS."
+            ),
+        ]
+
+        for item in conversation_provenance:
+
+            provenance_parts.append(
+                "\n".join(
+                    [
+                        "PREVIOUS ANSWER",
+                        (
+                            "Memory IDs: "
+                            + ", ".join(
+                                item["memory_ids"]
+                            )
+                        ),
+                        (
+                            "Answer: "
+                            + item["answer"]
+                        ),
+                    ]
+                )
+            )
+
+        context_parts.append(
+            "\n\n".join(
+                provenance_parts
+            )
+        )
+
 
     # --------------------------------------------------------
     # Non-memory tool results.

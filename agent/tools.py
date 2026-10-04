@@ -62,9 +62,7 @@ def _truncate_text(
     )
 
     if content_limit <= 0:
-        return TRUNCATION_MARKER[
-            :max_chars
-        ]
+        return TRUNCATION_MARKER[:max_chars]
 
     return (
         text[:content_limit].rstrip()
@@ -82,7 +80,10 @@ def _resolve_memory_title(
     scope: MemoryScope,
 ) -> str:
     """
-    Title from vector metadata, falling back to the database.
+    Resolve the memory title.
+
+    First tries vector metadata.
+    Falls back to the database if the title is unavailable.
     """
 
     title = document.metadata.get(
@@ -99,7 +100,6 @@ def _resolve_memory_title(
             )
 
             if memory:
-
                 title = memory.get(
                     "title"
                 )
@@ -121,14 +121,13 @@ def _build_memory_evidence(
     """
     Build bounded evidence for the LLM.
 
-    IMPORTANT:
     Evidence is chunk-level.
 
     Sources are memory-level.
 
-    Therefore, if five chunks belong to the same memory,
-    the LLM still receives all relevant chunks, but the UI
-    receives only ONE source for that memory.
+    Therefore, if multiple chunks belong to the same memory,
+    the LLM receives the relevant chunks while the UI receives
+    only one source entry for that memory.
     """
 
     formatted_results = []
@@ -179,11 +178,6 @@ def _build_memory_evidence(
             "unknown",
         )
 
-        chunk_index = document.metadata.get(
-            "chunk_index",
-            0,
-        )
-
         # ----------------------------------------------------
         # Character budget
         # ----------------------------------------------------
@@ -211,8 +205,8 @@ def _build_memory_evidence(
 
         evidence_rank += 1
 
-        # The final LLM can only report which memories it used
-        # (USED_MEMORY_IDS) if it can SEE their IDs.
+        # The final LLM needs to see the memory ID
+        # so it can report USED_MEMORY_IDS.
         if memory_id not in titles:
 
             titles[memory_id] = _resolve_memory_title(
@@ -255,15 +249,10 @@ def _build_memory_evidence(
         )
 
         # ----------------------------------------------------
-        # MEMORY-LEVEL SOURCE
-        # ----------------------------------------------------
-        #
-        # Only create one source entry for each memory.
+        # Memory-level source
         # ----------------------------------------------------
 
         if memory_id not in sources_by_memory:
-
-            # Title was resolved above (titles cache).
 
             sources_by_memory[
                 memory_id
@@ -281,7 +270,7 @@ def _build_memory_evidence(
 
         else:
 
-            # Keep the strongest distance
+            # Keep strongest distance
             # for this memory.
             current_distance = (
                 sources_by_memory[
@@ -673,7 +662,7 @@ def create_tools(
             )
 
         # ----------------------------------------------------
-        # Build evidence + memory-level sources
+        # Build evidence + sources
         # ----------------------------------------------------
 
         (
@@ -723,7 +712,6 @@ def create_tools(
             "threshold":
                 DEFAULT_DISTANCE_THRESHOLD,
             "sources": sources,
-
             "limits": {
                 "max_chunks":
                     MAX_MEMORY_SEARCH_CHUNKS,
@@ -742,80 +730,7 @@ def create_tools(
         )
 
     # ========================================================
-    # Tool 2 — Get Memory
-    # ========================================================
-
-    @tool
-    def get_memory(
-        memory_id_requested: str,
-    ) -> str:
-        """
-        Get bounded details about one saved memory.
-        """
-
-        if (
-            not memory_id_requested
-            or not memory_id_requested.strip()
-        ):
-
-            return (
-                "Memory ID cannot be empty."
-            )
-
-        memory_id_requested = (
-            memory_id_requested.strip()
-        )
-
-        if not _is_memory_allowed(
-            scope,
-            memory_id_requested,
-        ):
-
-            return (
-                "Memory not found."
-            )
-
-        memory = get_memory_record(
-            memory_id=memory_id_requested,
-            user_id=user_id,
-        )
-
-        if memory is None:
-
-            return (
-                "Memory not found."
-            )
-
-        extracted_text = _truncate_text(
-            memory.get(
-                "extracted_text",
-                "",
-            ),
-            MAX_MEMORY_DETAIL_CHARS,
-        )
-
-        return f"""
-Memory ID:
-{memory["id"]}
-
-Title:
-{memory["title"]}
-
-Memory Type:
-{memory["memory_type"]}
-
-File Name:
-{memory["file_name"]}
-
-Summary:
-{memory["summary"] or "No summary available."}
-
-Extracted Content:
-{extracted_text}
-""".strip()
-
-    # ========================================================
-    # Tool 3 — Calculator
+    # Tool 2 — Calculator
     # ========================================================
 
     @tool
@@ -841,7 +756,7 @@ Extracted Content:
             )
 
     # ========================================================
-    # Tool 4 — Web Search
+    # Tool 3 — Web Search
     # ========================================================
 
     tavily_tool = None
@@ -896,9 +811,12 @@ Extracted Content:
                 f"Web search failed: {error}"
             )
 
+    # ========================================================
+    # Return ONLY tools that the agent should be allowed to use
+    # ========================================================
+
     return [
         search_memories,
-        get_memory,
         calculate,
         search_web,
     ]
