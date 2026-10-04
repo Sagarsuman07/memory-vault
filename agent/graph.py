@@ -374,7 +374,21 @@ def run_langgraph_agent(
         "configurable": {
             "thread_id":
                 thread_id,
-        }
+        },
+        "metadata": {
+            "user_id": user_id,
+            "scope": (
+                "memory"
+                if memory_id is not None
+                else "all"
+            ),
+            "memory_id": memory_id,
+            "max_tool_calls": settings.MAX_TOOL_CALLS,
+        },
+        "tags": [
+            "memory-vault",
+            "phase-0.4",
+        ],
     }
 
     result = graph.invoke(
