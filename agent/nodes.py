@@ -24,13 +24,10 @@ You can use these tools:
 1. search_memories
    Search the user's saved memories.
 
-2. get_memory
-   Retrieve detailed information about a specific memory.
-
-3. calculate
+2. calculate
    Perform arithmetic calculations.
 
-4. search_web
+3. search_web
    Search the internet for current or external information.
 
 ============================================================
@@ -42,6 +39,10 @@ MEMORY RULES
 
 - Prefer the user's memories for personal or historical
   information.
+
+- If the user asks several independent questions in one message,
+  call search_memories once for EACH question, each with a short
+  focused query. You may request these calls together.
 
 - Use calculate for arithmetic.
 
@@ -731,6 +732,67 @@ def _extract_conversation_memory_provenance(messages):
 # Build Final Answer Context
 # ============================================================
 
+_EVIDENCE_BLOCK_START = re.compile(
+    r"(?m)^(?=Evidence \d+\nMemory ID: )"
+)
+
+
+def _evidence_for_memory(
+    tool_content,
+    memory_id: str,
+) -> list:
+    """
+    search_memories formats its result as blocks:
+
+        Evidence N
+        Memory ID: <id>
+        Title: ...
+        Content: ...
+
+    Return ONLY the blocks that belong to memory_id, so a memory
+    record is never labelled with another memory's evidence.
+
+    Content without per-block IDs (older format) is returned whole.
+    """
+
+    text = str(tool_content or "").strip()
+
+    if not text:
+
+        return []
+
+    blocks = [
+        block.strip()
+        for block in _EVIDENCE_BLOCK_START.split(text)
+        if block.strip()
+    ]
+
+    own_blocks = []
+
+    has_ids = False
+
+    for block in blocks:
+
+        match = re.match(
+            r"Evidence \d+\nMemory ID:\s*(\S+)",
+            block,
+        )
+
+        if match:
+
+            has_ids = True
+
+            if match.group(1) == memory_id:
+
+                own_blocks.append(block)
+
+    if has_ids:
+
+        return own_blocks
+
+    return [text]
+
+
 def _build_final_context(
     messages,
     state,
@@ -850,18 +912,21 @@ def _build_final_context(
             # Keep it associated with the exact memory ID.
             # ------------------------------------------------
 
-            if tool_content:
+            existing_content = (
+                memory_groups[
+                    memory_id
+                ]["content"]
+            )
 
-                existing_content = (
-                    memory_groups[
-                        memory_id
-                    ]["content"]
-                )
+            for block in _evidence_for_memory(
+                tool_content,
+                memory_id,
+            ):
 
-                if tool_content not in existing_content:
+                if block not in existing_content:
 
                     existing_content.append(
-                        tool_content
+                        block
                     )
 
     # --------------------------------------------------------

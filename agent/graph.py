@@ -29,6 +29,15 @@ from agent.nodes import (
 
 from agent.tools import create_tools
 
+from agent.limits import (
+    close_dangling_tool_calls,
+    create_limited_tool_node,
+    get_recursion_limit,
+    route_after_tools,
+)
+
+from langgraph.errors import GraphRecursionError
+
 from config.settings import settings
 
 from database.repositories import (
@@ -202,7 +211,7 @@ def build_agent_graph(
         scope=memory_scope
     )
 
-    tool_node = ToolNode(
+    tool_node = create_limited_tool_node(
         tools
     )
 
@@ -257,9 +266,16 @@ def build_agent_graph(
         },
     )
 
-    graph_builder.add_edge(
+    # After the tools run: if a call was blocked by MAX_TOOL_CALLS,
+    # go straight to answer_node (it explains the limitation and keeps
+    # the results already obtained). Otherwise ask the agent again.
+    graph_builder.add_conditional_edges(
         "tools",
-        "agent",
+        route_after_tools,
+        {
+            "agent": "agent",
+            "answer": "answer",
+        },
     )
 
     graph_builder.add_edge(
@@ -389,12 +405,31 @@ def run_langgraph_agent(
             "memory-vault",
             "phase-0.4",
         ],
+
+        # Backstop only. MAX_TOOL_CALLS normally stops a request first.
+        "recursion_limit":
+            get_recursion_limit(),
     }
 
-    result = graph.invoke(
-        input_state,
-        config,
-    )
+    try:
+
+        result = graph.invoke(
+            input_state,
+            config,
+        )
+
+    except GraphRecursionError:
+
+        # Repair the thread (answer dangling tool calls, store a
+        # visible assistant message) so later questions still work.
+        close_dangling_tool_calls(
+            graph,
+            config,
+        )
+
+        result = dict(
+            graph.get_state(config).values
+        )
 
     return {
         "answer":
