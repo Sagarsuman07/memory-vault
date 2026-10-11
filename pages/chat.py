@@ -2805,16 +2805,24 @@ if question:
 
         try:
 
-            with st.spinner(
-                "Memory Vault is thinking..."
-            ):
+            # Render the submitted question immediately instead of
+            # waiting for the next rerun after LangGraph finishes.
+            with st.chat_message("user"):
+                st.write(question)
 
-                run_langgraph_agent(
-                    question=question,
-                    user_id=USER_ID,
-                    thread_id=thread_id,
-                    memory_id=current_memory_id,
-                )
+            # Keep the assistant placeholder visible while the graph
+            # runs. The final answer and sources are rendered from the
+            # persisted LangGraph messages after the rerun below.
+            with st.chat_message("assistant"):
+                with st.spinner(
+                    "Memory Vault is thinking..."
+                ):
+                    run_langgraph_agent(
+                        question=question,
+                        user_id=USER_ID,
+                        thread_id=thread_id,
+                        memory_id=current_memory_id,
+                    )
 
             # ------------------------------------------------
             # Read the persisted LangGraph state and extract
