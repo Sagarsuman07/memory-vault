@@ -1,0 +1,377 @@
+{
+  "evaluation": {
+    "timestamp": "2026-10-11_04-32-18",
+    "user_id": "demo_user",
+    "input_file": "C:\\Users\\sagar suman\\Desktop\\memory-vault\\evaluation\\golden_questions.xlsx",
+    "total_tests": 4
+  },
+  "results": [
+    {
+      "test_id": "T001",
+      "conversation_id": "C001",
+      "round": 1,
+      "thread_id": "demo_user:bb590aa5-2b4a-46b6-a5dc-95a31aeb02c2",
+      "input": {
+        "scope_type": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "query": "What was my headphone price?",
+        "expected_answer": "₹25,000",
+        "expected_memory_ids": [],
+        "expected_tools": [
+          "search_memories"
+        ],
+        "max_tool_calls": 6
+      },
+      "execution": {
+        "actual_answer": "Your headphone price was ৳25,000.",
+        "actual_memory_ids": [
+          "57fb7b93-8849-44ab-912d-92b97b633205"
+        ],
+        "actual_tools": [
+          "search_memories"
+        ],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": [],
+        "scope": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "retrieval_sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "latency_ms": 104061.67,
+        "error": ""
+      },
+      "checks": {
+        "answer_check": "FAIL",
+        "memory_check": "NOT_APPLICABLE",
+        "tool_check": "PASS",
+        "tool_budget_check": "PASS",
+        "scope_isolation_check": "PASS",
+        "deterministic_pass": "FAIL"
+      },
+      "raw_agent_result": {
+        "answer": "Your headphone price was ৳25,000.",
+        "tool_calls": [
+          {
+            "tool": "search_memories",
+            "arguments": {
+              "query": "headphone price"
+            }
+          }
+        ],
+        "messages": [
+          "content='What was my headphone price?' additional_kwargs={} response_metadata={} id='9395a7f8-7144-4cd4-9541-7cd1915f8ab0'",
+          "content='' additional_kwargs={'reasoning_content': 'The user asks: \"What was my headphone price?\" Need to retrieve from user\\'s saved memories. Use search_memories with query about headphone price. Probably need to search for \"headphone price\". Use search_memories.', 'tool_calls': [{'id': 'fc_bdffac71-9786-4383-b23f-fa42a7298995', 'function': {'arguments': '{\"query\":\"headphone price\"}', 'name': 'search_memories'}, 'type': 'function'}]} response_metadata={'token_usage': {'completion_tokens': 75, 'prompt_tokens': 463, 'total_tokens': 538, 'completion_time': 0.15553082, 'completion_tokens_details': {'reasoning_tokens': 45}, 'prompt_time': 0.021264687, 'prompt_tokens_details': None, 'queue_time': 0.385532674, 'total_time': 0.176795507}, 'model_name': 'openai/gpt-oss-120b', 'system_fingerprint': 'fp_ca5edfaab2', 'service_tier': 'on_demand', 'finish_reason': 'tool_calls', 'logprobs': None, 'model_provider': 'groq'} id='lc_run--01a1280d-a008-70b3-b0da-32668d3e8f52-0' tool_calls=[{'name': 'search_memories', 'args': {'query': 'headphone price'}, 'id': 'fc_bdffac71-9786-4383-b23f-fa42a7298995', 'type': 'tool_call'}] invalid_tool_calls=[] usage_metadata={'input_tokens': 463, 'output_tokens': 75, 'total_tokens': 538, 'output_token_details': {'reasoning': 45}}",
+          "content='Evidence 1\\nMemory ID: 57fb7b93-8849-44ab-912d-92b97b633205\\nTitle: Untitled Memory\\n\\nContent:\\nThis image is a plain white document containing four lines of left-aligned black text. The first line reads \"Sony Headphones\". The second line reads \"Sony WH Series\". The third line reads \"Premium Headphones\". The fourth line reads \"Price: ৳25,000\".' name='search_memories' id='2ee2022f-42dc-48db-a5e1-3ccec0f646bb' tool_call_id='fc_bdffac71-9786-4383-b23f-fa42a7298995' artifact={'grounded': True, 'confidence': 'Medium retrieval confidence', 'distance': 0.9240868091583252, 'threshold': 1.2, 'sources': [{'memory_id': '57fb7b93-8849-44ab-912d-92b97b633205', 'memory_type': 'image', 'title': 'Untitled Memory', 'distance': 0.9240868091583252}], 'limits': {'max_chunks': 5, 'max_chars_per_chunk': 1500, 'max_total_chars': 7500}}",
+          "content='Your headphone price was\\u202f৳25,000.' additional_kwargs={'used_memory_ids': ['57fb7b93-8849-44ab-912d-92b97b633205']} response_metadata={} id='dfe00910-18c5-4019-86ba-8203c3db15af' tool_calls=[] invalid_tool_calls=[]"
+        ],
+        "thread_id": "demo_user:bb590aa5-2b4a-46b6-a5dc-95a31aeb02c2",
+        "scope": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "memory_scope": {
+          "user_id": "demo_user",
+          "scope_type": "memory",
+          "memory_ids": [
+            "57fb7b93-8849-44ab-912d-92b97b633205"
+          ]
+        },
+        "sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "retrieval_sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": []
+      }
+    },
+    {
+      "test_id": "T002",
+      "conversation_id": "C001",
+      "round": 2,
+      "thread_id": "demo_user:bb590aa5-2b4a-46b6-a5dc-95a31aeb02c2",
+      "input": {
+        "scope_type": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "query": "What was the brand name and series name?",
+        "expected_answer": "Sony WH Series",
+        "expected_memory_ids": [],
+        "expected_tools": [
+          "search_memories"
+        ],
+        "max_tool_calls": 6
+      },
+      "execution": {
+        "actual_answer": "The brand name is **Sony**, and the series name is **WH Series**.",
+        "actual_memory_ids": [
+          "57fb7b93-8849-44ab-912d-92b97b633205"
+        ],
+        "actual_tools": [],
+        "tool_call_count": 0,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": [],
+        "scope": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "retrieval_sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "latency_ms": 11209.87,
+        "error": ""
+      },
+      "checks": {
+        "answer_check": "FAIL",
+        "memory_check": "NOT_APPLICABLE",
+        "tool_check": "FAIL",
+        "tool_budget_check": "PASS",
+        "scope_isolation_check": "PASS",
+        "deterministic_pass": "FAIL"
+      },
+      "raw_agent_result": {
+        "answer": "The brand name is **Sony**, and the series name is **WH Series**.",
+        "tool_calls": [],
+        "messages": [
+          "content='What was my headphone price?' additional_kwargs={} response_metadata={} id='9395a7f8-7144-4cd4-9541-7cd1915f8ab0'",
+          "content='' additional_kwargs={'reasoning_content': 'The user asks: \"What was my headphone price?\" Need to retrieve from user\\'s saved memories. Use search_memories with query about headphone price. Probably need to search for \"headphone price\". Use search_memories.', 'tool_calls': [{'id': 'fc_bdffac71-9786-4383-b23f-fa42a7298995', 'function': {'arguments': '{\"query\":\"headphone price\"}', 'name': 'search_memories'}, 'type': 'function'}]} response_metadata={'token_usage': {'completion_tokens': 75, 'prompt_tokens': 463, 'total_tokens': 538, 'completion_time': 0.15553082, 'completion_tokens_details': {'reasoning_tokens': 45}, 'prompt_time': 0.021264687, 'prompt_tokens_details': None, 'queue_time': 0.385532674, 'total_time': 0.176795507}, 'model_name': 'openai/gpt-oss-120b', 'system_fingerprint': 'fp_ca5edfaab2', 'service_tier': 'on_demand', 'finish_reason': 'tool_calls', 'logprobs': None, 'model_provider': 'groq'} id='lc_run--01a1280d-a008-70b3-b0da-32668d3e8f52-0' tool_calls=[{'name': 'search_memories', 'args': {'query': 'headphone price'}, 'id': 'fc_bdffac71-9786-4383-b23f-fa42a7298995', 'type': 'tool_call'}] invalid_tool_calls=[] usage_metadata={'input_tokens': 463, 'output_tokens': 75, 'total_tokens': 538, 'output_token_details': {'reasoning': 45}}",
+          "content='Evidence 1\\nMemory ID: 57fb7b93-8849-44ab-912d-92b97b633205\\nTitle: Untitled Memory\\n\\nContent:\\nThis image is a plain white document containing four lines of left-aligned black text. The first line reads \"Sony Headphones\". The second line reads \"Sony WH Series\". The third line reads \"Premium Headphones\". The fourth line reads \"Price: ৳25,000\".' name='search_memories' id='2ee2022f-42dc-48db-a5e1-3ccec0f646bb' tool_call_id='fc_bdffac71-9786-4383-b23f-fa42a7298995' artifact={'grounded': True, 'confidence': 'Medium retrieval confidence', 'distance': 0.9240868091583252, 'threshold': 1.2, 'sources': [{'memory_id': '57fb7b93-8849-44ab-912d-92b97b633205', 'memory_type': 'image', 'title': 'Untitled Memory', 'distance': 0.9240868091583252}], 'limits': {'max_chunks': 5, 'max_chars_per_chunk': 1500, 'max_total_chars': 7500}}",
+          "content='Your headphone price was\\u202f৳25,000.' additional_kwargs={'used_memory_ids': ['57fb7b93-8849-44ab-912d-92b97b633205']} response_metadata={} id='dfe00910-18c5-4019-86ba-8203c3db15af' tool_calls=[] invalid_tool_calls=[]",
+          "content='What was the brand name and series name?' additional_kwargs={} response_metadata={} id='aea15d15-3752-4a28-968c-b2e2160794b3'",
+          "content='The brand name is **Sony**, and the series name is **WH Series**.' additional_kwargs={'used_memory_ids': ['57fb7b93-8849-44ab-912d-92b97b633205']} response_metadata={} id='8d5d25a3-dc4e-4066-a164-8b2f898e3927' tool_calls=[] invalid_tool_calls=[]"
+        ],
+        "thread_id": "demo_user:bb590aa5-2b4a-46b6-a5dc-95a31aeb02c2",
+        "scope": "memory",
+        "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+        "memory_scope": {
+          "user_id": "demo_user",
+          "scope_type": "memory",
+          "memory_ids": [
+            "57fb7b93-8849-44ab-912d-92b97b633205"
+          ]
+        },
+        "sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "retrieval_sources": [
+          {
+            "memory_id": "57fb7b93-8849-44ab-912d-92b97b633205",
+            "memory_type": "image",
+            "title": "Untitled Memory",
+            "distance": 0.9240868091583252
+          }
+        ],
+        "tool_call_count": 0,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": []
+      }
+    },
+    {
+      "test_id": "T003",
+      "conversation_id": "C002",
+      "round": 1,
+      "thread_id": "demo_user:6ca012c6-2235-428e-b1c7-42c65479a2c1",
+      "input": {
+        "scope_type": "all",
+        "memory_id": "",
+        "query": "What was my hotel name?",
+        "expected_answer": "Hotel ABC",
+        "expected_memory_ids": [
+          "1b666268-e9f1-4641-a44f-3fd1983fd3f7"
+        ],
+        "expected_tools": [
+          "search_memories"
+        ],
+        "max_tool_calls": 6
+      },
+      "execution": {
+        "actual_answer": "Your hotel was **Hotel ABC**.",
+        "actual_memory_ids": [
+          "0324edff-1775-4253-9e35-9a3636e10ee4",
+          "1b666268-e9f1-4641-a44f-3fd1983fd3f7"
+        ],
+        "actual_tools": [
+          "search_memories"
+        ],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": [],
+        "scope": "all",
+        "memory_id": "",
+        "retrieval_sources": [
+          {
+            "memory_id": "0324edff-1775-4253-9e35-9a3636e10ee4",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          },
+          {
+            "memory_id": "1b666268-e9f1-4641-a44f-3fd1983fd3f7",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          }
+        ],
+        "latency_ms": 13177.74,
+        "error": ""
+      },
+      "checks": {
+        "answer_check": "PASS",
+        "memory_check": "PASS",
+        "tool_check": "PASS",
+        "tool_budget_check": "PASS",
+        "scope_isolation_check": "NOT_APPLICABLE",
+        "deterministic_pass": "PASS"
+      },
+      "raw_agent_result": {
+        "answer": "Your hotel was **Hotel ABC**.",
+        "tool_calls": [
+          {
+            "tool": "search_memories",
+            "arguments": {
+              "query": "hotel name"
+            }
+          }
+        ],
+        "messages": [
+          "content='What was my hotel name?' additional_kwargs={} response_metadata={} id='4bb73950-2f8d-4c74-9474-a325fb5f6e66'",
+          "content='' additional_kwargs={'reasoning_content': 'The user asks: \"What was my hotel name?\" We need to retrieve from user\\'s saved memories. Use search_memories with query likely \"hotel name\". Could be multiple hotels; but we need to ask for the specific memory. The user likely has a memory of a hotel they stayed at. We should search memories. Use search_memories with query \"hotel name\".', 'tool_calls': [{'id': 'fc_a25dbde1-f2f0-4062-8cc6-bf295278a537', 'function': {'arguments': '{\"query\":\"hotel name\"}', 'name': 'search_memories'}, 'type': 'function'}]} response_metadata={'token_usage': {'completion_tokens': 104, 'prompt_tokens': 463, 'total_tokens': 567, 'completion_time': 0.215585358, 'completion_tokens_details': {'reasoning_tokens': 75}, 'prompt_time': 0.020149077, 'prompt_tokens_details': None, 'queue_time': 3.944922043, 'total_time': 0.235734435}, 'model_name': 'openai/gpt-oss-120b', 'system_fingerprint': 'fp_27194a498a', 'service_tier': 'on_demand', 'finish_reason': 'tool_calls', 'logprobs': None, 'model_provider': 'groq'} id='lc_run--01a1280f-5afa-7831-a4f7-a7cf166387f7-0' tool_calls=[{'name': 'search_memories', 'args': {'query': 'hotel name'}, 'id': 'fc_a25dbde1-f2f0-4062-8cc6-bf295278a537', 'type': 'tool_call'}] invalid_tool_calls=[] usage_metadata={'input_tokens': 463, 'output_tokens': 104, 'total_tokens': 567, 'output_token_details': {'reasoning': 75}}",
+          "content='Evidence 1\\nMemory ID: 0324edff-1775-4253-9e35-9a3636e10ee4\\nTitle: Untitled Memory\\n\\nContent:\\nHotel booking. Hotel ABC in Delhi. Stay from 15 September 2026 to 18 September 2026. Room cost ₹5,000 per night.\\n\\nEvidence 2\\nMemory ID: 1b666268-e9f1-4641-a44f-3fd1983fd3f7\\nTitle: Untitled Memory\\n\\nContent:\\nHotel booking. Hotel ABC in Delhi. Stay from 15 September 2026 to 18 September 2026. Room cost ₹5,000 per night.' name='search_memories' id='fd38b2e2-95b1-4142-981f-d4a8dfbdeb9a' tool_call_id='fc_a25dbde1-f2f0-4062-8cc6-bf295278a537' artifact={'grounded': True, 'confidence': 'Medium retrieval confidence', 'distance': 1.1334280967712402, 'threshold': 1.2, 'sources': [{'memory_id': '0324edff-1775-4253-9e35-9a3636e10ee4', 'memory_type': 'document', 'title': 'Untitled Memory', 'distance': 1.1334280967712402}, {'memory_id': '1b666268-e9f1-4641-a44f-3fd1983fd3f7', 'memory_type': 'document', 'title': 'Untitled Memory', 'distance': 1.1334280967712402}], 'limits': {'max_chunks': 5, 'max_chars_per_chunk': 1500, 'max_total_chars': 7500}}",
+          "content='Your hotel was **Hotel\\u202fABC**.' additional_kwargs={'used_memory_ids': ['0324edff-1775-4253-9e35-9a3636e10ee4', '1b666268-e9f1-4641-a44f-3fd1983fd3f7']} response_metadata={} id='3e55077b-cdd5-4955-a881-ce97d12c7440' tool_calls=[] invalid_tool_calls=[]"
+        ],
+        "thread_id": "demo_user:6ca012c6-2235-428e-b1c7-42c65479a2c1",
+        "scope": "all",
+        "memory_id": null,
+        "memory_scope": {
+          "user_id": "demo_user",
+          "scope_type": "all",
+          "memory_ids": null
+        },
+        "sources": [
+          {
+            "memory_id": "0324edff-1775-4253-9e35-9a3636e10ee4",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          },
+          {
+            "memory_id": "1b666268-e9f1-4641-a44f-3fd1983fd3f7",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          }
+        ],
+        "retrieval_sources": [
+          {
+            "memory_id": "0324edff-1775-4253-9e35-9a3636e10ee4",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          },
+          {
+            "memory_id": "1b666268-e9f1-4641-a44f-3fd1983fd3f7",
+            "memory_type": "document",
+            "title": "Untitled Memory",
+            "distance": 1.1334280967712402
+          }
+        ],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": []
+      }
+    },
+    {
+      "test_id": "T004",
+      "conversation_id": "C003",
+      "round": 1,
+      "thread_id": "demo_user:0a22708b-4d86-4193-944b-1af1ef8a446c",
+      "input": {
+        "scope_type": "all",
+        "memory_id": "",
+        "query": "Calculate 25 + 75",
+        "expected_answer": "100",
+        "expected_memory_ids": [],
+        "expected_tools": [
+          "calculate"
+        ],
+        "max_tool_calls": 6
+      },
+      "execution": {
+        "actual_answer": "The sum of 25 and 75 is 100.",
+        "actual_memory_ids": [],
+        "actual_tools": [
+          "calculate"
+        ],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": [],
+        "scope": "all",
+        "memory_id": "",
+        "retrieval_sources": [],
+        "latency_ms": 6770.7,
+        "error": ""
+      },
+      "checks": {
+        "answer_check": "PASS",
+        "memory_check": "NOT_APPLICABLE",
+        "tool_check": "PASS",
+        "tool_budget_check": "PASS",
+        "scope_isolation_check": "NOT_APPLICABLE",
+        "deterministic_pass": "PASS"
+      },
+      "raw_agent_result": {
+        "answer": "The sum of 25 and 75 is 100.",
+        "tool_calls": [
+          {
+            "tool": "calculate",
+            "arguments": {
+              "expression": "25 + 75"
+            }
+          }
+        ],
+        "messages": [
+          "content='Calculate 25 + 75' additional_kwargs={} response_metadata={} id='35b12fb5-86fd-4824-9246-9d5a4f5666d5'",
+          "content='' additional_kwargs={'reasoning_content': 'The user asks to calculate 25 + 75. Use calculate tool.', 'tool_calls': [{'id': 'fc_41be131d-95dc-4220-a353-5905418c20e1', 'function': {'arguments': '{\"expression\":\"25 + 75\"}', 'name': 'calculate'}, 'type': 'function'}]} response_metadata={'token_usage': {'completion_tokens': 45, 'prompt_tokens': 463, 'total_tokens': 508, 'completion_time': 0.093586215, 'completion_tokens_details': {'reasoning_tokens': 16}, 'prompt_time': 0.024567924, 'prompt_tokens_details': None, 'queue_time': 0.403720293, 'total_time': 0.118154139}, 'model_name': 'openai/gpt-oss-120b', 'system_fingerprint': 'fp_e1a78f200e', 'service_tier': 'on_demand', 'finish_reason': 'tool_calls', 'logprobs': None, 'model_provider': 'groq'} id='lc_run--01a1280f-8ac1-7790-b9f4-a31c23313c82-0' tool_calls=[{'name': 'calculate', 'args': {'expression': '25 + 75'}, 'id': 'fc_41be131d-95dc-4220-a353-5905418c20e1', 'type': 'tool_call'}] invalid_tool_calls=[] usage_metadata={'input_tokens': 463, 'output_tokens': 45, 'total_tokens': 508, 'output_token_details': {'reasoning': 16}}",
+          "content='Result: 100' name='calculate' id='b9f12a9e-4182-4531-8c72-5ab47b5b1e68' tool_call_id='fc_41be131d-95dc-4220-a353-5905418c20e1'",
+          "content='The sum of 25 and 75 is 100.' additional_kwargs={'used_memory_ids': []} response_metadata={} id='1dfb6e25-f803-4232-9756-f299807e3dda' tool_calls=[] invalid_tool_calls=[]"
+        ],
+        "thread_id": "demo_user:0a22708b-4d86-4193-944b-1af1ef8a446c",
+        "scope": "all",
+        "memory_id": null,
+        "memory_scope": {
+          "user_id": "demo_user",
+          "scope_type": "all",
+          "memory_ids": null
+        },
+        "sources": [],
+        "retrieval_sources": [],
+        "tool_call_count": 1,
+        "tool_limit_reached": false,
+        "blocked_tool_calls": []
+      }
+    }
+  ]
+}

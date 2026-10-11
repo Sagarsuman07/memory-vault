@@ -387,6 +387,7 @@ def run_langgraph_agent(
     }
 
     config = {
+        "run_name": "memory-vault-agent",
         "configurable": {
             "thread_id":
                 thread_id,
