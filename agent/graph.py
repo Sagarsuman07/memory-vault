@@ -193,6 +193,17 @@ def build_memory_scope(
     }
 
 
+def route_after_understand_query(state) -> str:
+    """
+    Route safe direct-answer intents around the agent/tool loop.
+    Fail closed to the agent whenever a direct answer is unavailable.
+    """
+    direct_answer = str(state.get("direct_answer") or "").strip()
+    if state.get("needs_tools") is False and direct_answer:
+        return "answer"
+    return "agent"
+
+
 # ============================================================
 # Build Graph
 # ============================================================
@@ -252,9 +263,13 @@ def build_agent_graph(
         "understand_query",
     )
 
-    graph_builder.add_edge(
+    graph_builder.add_conditional_edges(
         "understand_query",
-        "agent",
+        route_after_understand_query,
+        {
+            "agent": "agent",
+            "answer": "answer",
+        },
     )
 
     graph_builder.add_conditional_edges(
