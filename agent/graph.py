@@ -25,6 +25,8 @@ from agent.nodes import (
     understand_query,
     agent_node,
     answer_node,
+    should_summarize_conversation,
+    summarize_conversation,
 )
 
 from agent.tools import create_tools
@@ -204,6 +206,16 @@ def route_after_understand_query(state) -> str:
     return "agent"
 
 
+
+def route_after_answer(state) -> str:
+    """
+    Check summary conditions after either direct or tool-backed answers.
+    """
+    if should_summarize_conversation(state):
+        return "summarize"
+    return "end"
+
+
 # ============================================================
 # Build Graph
 # ============================================================
@@ -254,6 +266,11 @@ def build_agent_graph(
         answer_node,
     )
 
+    graph_builder.add_node(
+        "summarize_conversation",
+        summarize_conversation,
+    )
+
     # --------------------------------------------------------
     # Edges
     # --------------------------------------------------------
@@ -293,8 +310,19 @@ def build_agent_graph(
         },
     )
 
-    graph_builder.add_edge(
+    # Both direct answers and tool-backed answers pass through this
+    # conditional check before the graph ends.
+    graph_builder.add_conditional_edges(
         "answer",
+        route_after_answer,
+        {
+            "summarize": "summarize_conversation",
+            "end": END,
+        },
+    )
+
+    graph_builder.add_edge(
+        "summarize_conversation",
         END,
     )
 
