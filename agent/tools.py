@@ -91,32 +91,32 @@ def _resolve_memory_title(
     Falls back to the database if the title is unavailable.
     """
 
-    title = document.metadata.get(
-        "title"
-    )
+    # SQLite is the source of truth for user-facing memory titles.
+    # Vector metadata may be stale or may contain the placeholder title
+    # "Untitled Memory" even after the SQL record was updated.
+    metadata_title = document.metadata.get("title")
+    title = None
 
-    if not title:
+    try:
+        memory = get_memory_record(
+            memory_id=memory_id,
+            user_id=scope["user_id"],
+        )
+        if memory:
+            title = memory.get("title")
+    except Exception:
+        # Retrieval should still work if the title lookup fails; use only
+        # the metadata fallback and never change the retrieval result.
+        title = None
 
-        try:
+    def usable_title(value):
+        value = str(value or "").strip()
+        return value if value and value.casefold() not in {
+            "untitled memory", "untitled", "none", "null"
+        } else None
 
-            memory = get_memory_record(
-                memory_id=memory_id,
-                user_id=scope["user_id"],
-            )
-
-            if memory:
-                title = memory.get(
-                    "title"
-                )
-
-        except Exception:
-
-            title = None
-
-    return _truncate_text(
-        title or "Untitled Memory",
-        120,
-    )
+    title = usable_title(title) or usable_title(metadata_title)
+    return _truncate_text(title or "Untitled Memory", 120)
 
 
 def _build_memory_evidence(
@@ -579,16 +579,21 @@ def _is_memory_allowed(
     scope: MemoryScope,
     memory_id: str,
 ) -> bool:
-
     if not memory_id:
         return False
 
-    if scope["scope_type"] == "all":
-        return True
+    if scope["scope_type"] == "memory":
+        return memory_id in (scope["memory_ids"] or [])
 
-    return memory_id in (
-        scope["memory_ids"] or []
-    )
+    # Global retrieval is already filtered by user_id in the retriever,
+    # but validate ownership again before exposing evidence/source IDs.
+    try:
+        return get_memory_record(
+            memory_id=memory_id,
+            user_id=scope["user_id"],
+        ) is not None
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -828,39 +833,28 @@ def _build_tools(
         """
 
         if not settings.TAVILY_API_KEY:
-
-            return (
-                "Web search is not configured. "
-                "TAVILY_API_KEY is missing."
+            # Raise instead of returning an error-looking string. A normal
+            # string is recorded by LangChain as a successful tool run.
+            raise RuntimeError(
+                "Web search is unavailable because TAVILY_API_KEY is not configured."
             )
 
-        if (
-            not query
-            or not query.strip()
-        ):
-
-            return (
-                "Web search query cannot be empty."
-            )
+        if not query or not query.strip():
+            raise ValueError("Web search query cannot be empty.")
 
         try:
-
-            results = _get_tavily().invoke(
-                {
-                    "query": query.strip()
-                }
-            )
-
-            return _truncate_text(
-                str(results),
-                MAX_WEB_RESULT_CHARS,
-            )
-
+            results = _get_tavily().invoke({"query": query.strip()})
         except Exception as error:
+            # Keep trace status accurate while avoiding a potentially huge
+            # provider traceback in the user-visible tool result.
+            raise RuntimeError(
+                "Web search failed because the external search service could not be reached."
+            ) from error
 
-            return (
-                f"Web search failed: {error}"
-            )
+        if not results:
+            return "Web search completed but returned no results for this query."
+
+        return _truncate_text(str(results), MAX_WEB_RESULT_CHARS)
 
     # ========================================================
     # Return ONLY tools that the agent should be allowed to use

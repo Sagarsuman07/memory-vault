@@ -239,12 +239,20 @@ def build_agent_graph(
     cached, so no per-request security check is skipped.
     """
 
-    if memory_scope is None:
-
-        memory_scope = build_memory_scope(
-            user_id=user_id,
-            memory_id=memory_id,
-        )
+    # Always reconstruct the authorized scope from the canonical arguments.
+    # A caller-supplied TypedDict is not an authorization credential.
+    authorized_scope = build_memory_scope(
+        user_id=user_id,
+        memory_id=memory_id,
+    )
+    if memory_scope is not None:
+        if (
+            memory_scope.get("user_id") != authorized_scope["user_id"]
+            or memory_scope.get("scope_type") != authorized_scope["scope_type"]
+            or list(memory_scope.get("memory_ids") or []) != list(authorized_scope.get("memory_ids") or [])
+        ):
+            raise ValueError("Provided memory scope does not match the authorized user/memory scope.")
+    memory_scope = authorized_scope
 
     return _compile_agent_graph(
         memory_scope["user_id"],
@@ -402,6 +410,10 @@ def run_langgraph_agent(
         raise ValueError(
             "Memory ID cannot be empty."
         )
+
+    user_id = user_id.strip()
+    question = question.strip()
+    thread_id = thread_id.strip()
 
     validate_thread_id(
         user_id=user_id,
