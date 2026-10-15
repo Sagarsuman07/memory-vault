@@ -1,5 +1,6 @@
 import re
 import html
+import time
 import streamlit as st
 
 
@@ -70,6 +71,92 @@ NOT_FOUND_MESSAGE = (
 
 
 # ============================================================
+# Per-run lookup cache
+# ============================================================
+# Streamlit re-executes this script on every interaction, so this
+# dict is created fresh for each run. It only removes repeated
+# SQLite lookups INSIDE one run; nothing is shared between runs,
+# so deleted memories are never shown from a stale cache.
+
+_RUN_CACHE = {}
+
+
+def get_user_memories():
+    """list_memories(USER_ID), fetched at most once per run."""
+
+    if "memories" not in _RUN_CACHE:
+
+        _RUN_CACHE["memories"] = list(
+            list_memories(
+                USER_ID
+            )
+        )
+
+    return _RUN_CACHE["memories"]
+
+
+def get_memory_map():
+    """{memory_id: memory}, built at most once per run."""
+
+    if "memory_map" not in _RUN_CACHE:
+
+        _RUN_CACHE["memory_map"] = {
+            memory["id"]: memory
+            for memory in get_user_memories()
+        }
+
+    return _RUN_CACHE["memory_map"]
+
+
+# ============================================================
+# Chat History Cache (per browser session)
+# ============================================================
+# get_conversation_history() loads every thread from the
+# checkpointer. The popover is rendered on every rerun, so the
+# result is kept for a short time and dropped whenever this page
+# changes conversations (new answer, delete).
+
+HISTORY_CACHE_SECONDS = 60
+
+
+def load_chat_history():
+
+    cached = st.session_state.get(
+        "chat_history_cache"
+    )
+
+    if (
+        cached
+        and time.time() - cached["time"]
+        < HISTORY_CACHE_SECONDS
+    ):
+        return cached["items"]
+
+    items = list(
+        get_conversation_history(
+            USER_ID
+        )
+    )
+
+    st.session_state[
+        "chat_history_cache"
+    ] = {
+        "time": time.time(),
+        "items": items,
+    }
+
+    return items
+
+
+def invalidate_chat_history():
+
+    st.session_state.pop(
+        "chat_history_cache",
+        None,
+    )
+
+
+# ============================================================
 # Safe Memory Lookup
 # ============================================================
 
@@ -86,16 +173,29 @@ def get_existing_memory(
     if not memory_id:
         return None
 
+    lookups = _RUN_CACHE.setdefault(
+        "existing_memory",
+        {},
+    )
+
+    if memory_id in lookups:
+
+        return lookups[memory_id]
+
     try:
 
-        return get_memory_by_id(
+        memory = get_memory_by_id(
             memory_id=memory_id,
             user_id=USER_ID,
         )
 
     except ValueError:
 
-        return None
+        memory = None
+
+    lookups[memory_id] = memory
+
+    return memory
 
 
 # ============================================================
@@ -301,14 +401,7 @@ def parse_grounding_signal_from_artifact(
     # Resolve titles from user-owned SQLite records only.
     try:
 
-        memories = list_memories(
-            USER_ID
-        )
-
-        memory_map = {
-            memory["id"]: memory
-            for memory in memories
-        }
+        memory_map = get_memory_map()
 
         for source in sources:
 
@@ -498,14 +591,7 @@ def parse_grounding_signal_from_tool_content(
 
     try:
 
-        memories = list_memories(
-            USER_ID
-        )
-
-        memory_map = {
-            memory["id"]: memory
-            for memory in memories
-        }
+        memory_map = get_memory_map()
 
         for source in sources:
 
@@ -957,14 +1043,7 @@ def get_tool_grounding_signal_for_answer(
 
         try:
 
-            memories = list_memories(
-                USER_ID
-            )
-
-            memory_map = {
-                memory["id"]: memory
-                for memory in memories
-            }
+            memory_map = get_memory_map()
 
             for memory_id in (
                 missing_memory_ids
@@ -1075,6 +1154,7 @@ def get_cache_key(
     thread_id: str,
     question: str,
     memory_id: str | None,
+    assistant_index: int | None = None,
 ):
 
     scope_key = (
@@ -1083,9 +1163,12 @@ def get_cache_key(
         else "all"
     )
 
+    # assistant_index makes the key unique per answer, so asking the
+    # same question twice no longer reuses the first answer's sources.
     return (
         f"{thread_id}|"
         f"{scope_key}|"
+        f"{assistant_index}|"
         f"{question.strip()}"
     )
 
@@ -1112,6 +1195,7 @@ def get_or_create_retrieval_signal(
         thread_id=thread_id,
         question=question,
         memory_id=memory_id,
+        assistant_index=assistant_index,
     )
 
     if cache_key in cache:
@@ -1330,6 +1414,8 @@ def delete_conversation(
     _checkpointer.delete_thread(
         thread_id
     )
+
+    invalidate_chat_history()
 
 
 # ============================================================
@@ -1781,9 +1867,7 @@ with button_col2:
         try:
 
             conversations = list(
-                get_conversation_history(
-                    USER_ID
-                )
+                load_chat_history()
             )
 
             # Newest → oldest
@@ -2136,9 +2220,7 @@ new_scope = (
 
 if new_scope == "memory":
 
-    memories = list_memories(
-        USER_ID
-    )
+    memories = get_user_memories()
 
     if not memories:
 
@@ -2817,12 +2899,17 @@ if question:
                 with st.spinner(
                     "Memory Vault is thinking..."
                 ):
-                    run_langgraph_agent(
-                        question=question,
-                        user_id=USER_ID,
-                        thread_id=thread_id,
-                        memory_id=current_memory_id,
-                    )
+                    try:
+                        run_langgraph_agent(
+                            question=question,
+                            user_id=USER_ID,
+                            thread_id=thread_id,
+                            memory_id=current_memory_id,
+                        )
+                    finally:
+                        # A new or updated conversation must show up
+                        # in Chat History, even if the run failed.
+                        invalidate_chat_history()
 
             # ------------------------------------------------
             # Read the persisted LangGraph state and extract

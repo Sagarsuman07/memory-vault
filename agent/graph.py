@@ -1,5 +1,6 @@
 import sqlite3
 import uuid
+from functools import lru_cache
 
 from langgraph.graph import (
     StateGraph,
@@ -8,7 +9,6 @@ from langgraph.graph import (
 )
 
 from langgraph.prebuilt import (
-    ToolNode,
     tools_condition,
 )
 
@@ -231,12 +231,44 @@ def route_after_answer(state) -> str:
 def build_agent_graph(
     user_id: str,
     memory_id: str | None = None,
+    memory_scope: MemoryScope | None = None,
+):
+    """
+    Authorization is validated on EVERY call (build_memory_scope checks
+    that the memory belongs to the user). Only the compiled graph is
+    cached, so no per-request security check is skipped.
+    """
+
+    if memory_scope is None:
+
+        memory_scope = build_memory_scope(
+            user_id=user_id,
+            memory_id=memory_id,
+        )
+
+    return _compile_agent_graph(
+        memory_scope["user_id"],
+        memory_scope["scope_type"],
+        tuple(memory_scope["memory_ids"] or ()),
+    )
+
+
+@lru_cache(maxsize=256)
+def _compile_agent_graph(
+    user_id: str,
+    scope_type: str,
+    memory_ids: tuple,
 ):
 
-    memory_scope = build_memory_scope(
-        user_id=user_id,
-        memory_id=memory_id,
-    )
+    memory_scope = {
+        "user_id": user_id,
+        "scope_type": scope_type,
+        "memory_ids": (
+            list(memory_ids)
+            if scope_type == "memory"
+            else None
+        ),
+    }
 
     tools = create_tools(
         scope=memory_scope
@@ -384,6 +416,7 @@ def run_langgraph_agent(
     graph = build_agent_graph(
         user_id=user_id,
         memory_id=memory_id,
+        memory_scope=memory_scope,
     )
 
     input_state = {
@@ -582,6 +615,68 @@ def get_thread_state(
     )
 
 
+def _list_user_thread_ids(
+    user_prefix: str,
+) -> list:
+    """
+    Distinct thread IDs of one user, same order as before (oldest
+    activity first).
+
+    The old code read only the newest 1000 checkpoints of ALL users.
+    Every graph step is a checkpoint, so busy users or other users'
+    traffic could push a user's older conversations out of that
+    window. A DISTINCT query has no such blind spot.
+    """
+
+    try:
+
+        with _checkpointer.lock:
+
+            rows = _checkpoint_connection.execute(
+                "SELECT thread_id, MAX(checkpoint_id) AS latest "
+                "FROM checkpoints "
+                "WHERE substr(thread_id, 1, ?) = ? "
+                "GROUP BY thread_id "
+                "ORDER BY latest ASC",
+                (len(user_prefix), user_prefix),
+            ).fetchall()
+
+        return [
+            row[0]
+            for row in rows
+            if row[0]
+        ]
+
+    except Exception:
+
+        # Fallback for a different checkpointer schema/version.
+        thread_ids = []
+
+        for item in _checkpointer.list(
+            None,
+            limit=1000,
+        ):
+
+            thread_id = (
+                item.config
+                .get("configurable", {})
+                .get("thread_id")
+            )
+
+            if (
+                thread_id
+                and thread_id.startswith(user_prefix)
+                and thread_id not in thread_ids
+            ):
+
+                thread_ids.append(thread_id)
+
+        thread_ids.reverse()
+
+        return thread_ids
+
+
+
 # ============================================================
 # Conversation History
 # ============================================================
@@ -604,11 +699,8 @@ def get_conversation_history(
 
     try:
 
-        checkpoint_items = list(
-            _checkpointer.list(
-                None,
-                limit=1000,
-            )
+        thread_ids = _list_user_thread_ids(
+            user_prefix
         )
 
     except Exception as error:
@@ -616,45 +708,6 @@ def get_conversation_history(
         raise RuntimeError(
             "Unable to load conversation history."
         ) from error
-
-    thread_ids = []
-
-    for item in checkpoint_items:
-
-        try:
-
-            config = item.config
-
-            configurable = (
-                config.get(
-                    "configurable",
-                    {},
-                )
-            )
-
-            thread_id = (
-                configurable.get(
-                    "thread_id"
-                )
-            )
-
-        except Exception:
-
-            continue
-
-        if not thread_id:
-            continue
-
-        if not thread_id.startswith(
-            user_prefix
-        ):
-            continue
-
-        if thread_id not in thread_ids:
-
-            thread_ids.append(
-                thread_id
-            )
 
     for thread_id in thread_ids:
 
@@ -749,6 +802,5 @@ def get_conversation_history(
 
             continue
 
-    conversations.reverse()
 
     return conversations

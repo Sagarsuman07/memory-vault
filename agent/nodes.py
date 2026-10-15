@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from functools import lru_cache
 
 from langchain_core.messages import (
     SystemMessage,
@@ -12,6 +13,28 @@ from langchain_groq import ChatGroq
 
 from config.settings import settings
 from agent.tools import create_tools
+
+
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=8)
+def _build_llm(model_name, temperature, api_key):
+    return ChatGroq(
+        model=model_name,
+        temperature=temperature,
+        api_key=api_key,
+    )
+
+
+def _get_llm(temperature=0):
+    """Reuse one ChatGroq client per (model, temperature, key) instead of
+    building a new HTTP client for every node call."""
+    return _build_llm(
+        settings.GROQ_LLM_MODEL,
+        temperature,
+        settings.GROQ_API_KEY,
+    )
 
 
 # ============================================================
@@ -323,7 +346,7 @@ def _serialize_rounds(rounds) -> str:
         )
         ids = item.get("memory_ids", []) or []
         block = (
-            f"Q: {question}\\n"
+            f"Q: {question}\n"
             f"A: {answer}"
         )
         if ids:
@@ -338,7 +361,7 @@ def _serialize_rounds(rounds) -> str:
         remaining -= len(block) + 2
 
     selected_blocks.reverse()
-    return "\\n\\n".join(selected_blocks)
+    return "\n\n".join(selected_blocks)
 
 
 def _parse_json_response(content) -> dict:
@@ -346,7 +369,7 @@ def _parse_json_response(content) -> dict:
     if isinstance(content, str):
         text = content.strip()
     else:
-        text = _message_text(content)
+        text = _message_text(AIMessage(content=content or ""))
     if not text:
         raise ValueError("Empty query-understanding response.")
 
@@ -486,11 +509,7 @@ direct_answer="".
         if not settings.GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is not configured.")
 
-        model = ChatGroq(
-            model=settings.GROQ_LLM_MODEL,
-            temperature=0,
-            api_key=settings.GROQ_API_KEY,
-        )
+        model = _get_llm(0)
         response = model.invoke([
             SystemMessage(content=(
                 "You classify and rewrite user queries. Output valid JSON only. "
@@ -543,6 +562,10 @@ direct_answer="".
 
 
     except Exception:
+        logger.warning(
+            "Query understanding failed; routing to the agent.",
+            exc_info=True,
+        )
         # Query understanding must never make chat unusable. On failure,
         # use the original question and safely route to the existing agent.
         rewritten_question = question
@@ -717,11 +740,7 @@ NEWLY ELIGIBLE OLDER Q&A ROUNDS:
 {summary_rounds}
 """.strip()
 
-        model = ChatGroq(
-            model=settings.GROQ_LLM_MODEL,
-            temperature=0,
-            api_key=settings.GROQ_API_KEY,
-        )
+        model = _get_llm(0)
         response = model.invoke([
             SystemMessage(content=(
                 "Summarize only the supplied older conversation. "
@@ -831,11 +850,7 @@ def agent_node(
         scope=memory_scope
     )
 
-    model = ChatGroq(
-        model=settings.GROQ_LLM_MODEL,
-        temperature=0,
-        api_key=settings.GROQ_API_KEY,
-    )
+    model = _get_llm(0)
 
     model_with_tools = model.bind_tools(
         tools
@@ -944,7 +959,7 @@ def _clean_final_answer(
 
     # Remove source marker.
     text = re.sub(
-        r"(?im)^[\s>*_`#-]*USED_MEMORY_IDS.*$",
+        r"(?im)[ \t>*_`#-]*USED_MEMORY_IDS\b.*$",
         "",
         text,
     )
@@ -1004,7 +1019,7 @@ def _extract_used_memory_ids(
     )
 
     match = re.search(
-        r"(?im)^[\s>*_`#-]*USED_MEMORY_IDS[\s*_`]*:[\s*_`]*(.+?)\s*$",
+        r"(?im)USED_MEMORY_IDS[\s*_`]*:[\s*_`]*(.+?)\s*$",
         text,
     )
 
@@ -1631,11 +1646,7 @@ USER REQUEST:
 {creative_question}
 """.strip()
 
-        creative_model = ChatGroq(
-            model=settings.GROQ_LLM_MODEL,
-            temperature=0.7,
-            api_key=settings.GROQ_API_KEY,
-        )
+        creative_model = _get_llm(0.7)
         creative_response = creative_model.invoke([
             SystemMessage(content=(
                 "Generate original content requested by the user. "
@@ -1791,11 +1802,7 @@ USER REQUEST:
     # No tools are bound.
     # --------------------------------------------------------
 
-    model = ChatGroq(
-        model=settings.GROQ_LLM_MODEL,
-        temperature=0,
-        api_key=settings.GROQ_API_KEY,
-    )
+    model = _get_llm(0)
 
     # --------------------------------------------------------
     # Exactly ONE final LLM call.

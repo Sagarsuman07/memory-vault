@@ -1,5 +1,6 @@
 import ast
 import operator as op
+from functools import lru_cache
 
 from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
@@ -35,6 +36,10 @@ MAX_MEMORY_DETAIL_CHARS = 4000
 MAX_WEB_RESULT_CHARS = 6000
 
 TRUNCATION_MARKER = "\n...[truncated]"
+
+# Calculator safety limits
+MAX_EXPRESSION_CHARS = 500
+MAX_RESULT_BITS = 100_000
 
 
 # ============================================================
@@ -330,9 +335,9 @@ def _safe_calculate(node):
         ast.Constant,
     ):
 
-        if isinstance(
-            node.value,
-            (int, float),
+        if (
+            isinstance(node.value, (int, float))
+            and not isinstance(node.value, bool)
         ):
 
             return node.value
@@ -385,22 +390,49 @@ def _safe_calculate(node):
             node.right
         )
 
-        if (
-            isinstance(
-                node.op,
-                ast.Pow,
-            )
-            and abs(right) > 10
-        ):
+        if isinstance(node.op, ast.Pow):
 
-            raise ValueError(
-                "Exponent is too large."
-            )
+            if abs(right) > 10:
 
-        return operator(
+                raise ValueError(
+                    "Exponent is too large."
+                )
+
+            # Chained powers such as ((9**10)**10)**10 ... grow
+            # exponentially and could hang the server. Check the size
+            # BEFORE computing.
+            if (
+                isinstance(left, int)
+                and isinstance(right, int)
+                and right > 0
+                and abs(left).bit_length() * right > MAX_RESULT_BITS
+            ):
+
+                raise ValueError(
+                    "Result is too large."
+                )
+
+        result = operator(
             left,
             right,
         )
+
+        if isinstance(result, complex):
+
+            raise ValueError(
+                "Result is not a real number."
+            )
+
+        if (
+            isinstance(result, int)
+            and result.bit_length() > MAX_RESULT_BITS
+        ):
+
+            raise ValueError(
+                "Result is too large."
+            )
+
+        return result
 
     raise ValueError(
         "Only arithmetic expressions are supported."
@@ -418,6 +450,12 @@ def calculate_expression(
 
         raise ValueError(
             "Expression cannot be empty."
+        )
+
+    if len(expression) > MAX_EXPRESSION_CHARS:
+
+        raise ValueError(
+            "Expression is too long."
         )
 
     try:
@@ -441,6 +479,8 @@ def calculate_expression(
         SyntaxError,
         ValueError,
         TypeError,
+        OverflowError,
+        RecursionError,
     ) as error:
 
         raise ValueError(
@@ -552,10 +592,30 @@ def _is_memory_allowed(
 
 
 # ============================================================
+# Shared Web Search Client
+# ============================================================
+
+_tavily_client = None
+
+
+def _get_tavily():
+    global _tavily_client
+
+    if _tavily_client is None:
+
+        _tavily_client = TavilySearch(
+            max_results=5,
+            topic="general",
+        )
+
+    return _tavily_client
+
+
+# ============================================================
 # Create Tools
 # ============================================================
 
-def create_tools(
+def _build_tools(
     scope: MemoryScope,
 ):
 
@@ -759,15 +819,6 @@ def create_tools(
     # Tool 3 — Web Search
     # ========================================================
 
-    tavily_tool = None
-
-    if settings.TAVILY_API_KEY:
-
-        tavily_tool = TavilySearch(
-            max_results=5,
-            topic="general",
-        )
-
     @tool
     def search_web(
         query: str,
@@ -794,7 +845,7 @@ def create_tools(
 
         try:
 
-            results = tavily_tool.invoke(
+            results = _get_tavily().invoke(
                 {
                     "query": query.strip()
                 }
@@ -820,3 +871,50 @@ def create_tools(
         calculate,
         search_web,
     ]
+
+
+# ============================================================
+# Cached public entry point
+# ============================================================
+# The tools are stateless closures over an immutable scope, so one
+# set per (user, scope) is enough. agent_node used to rebuild them on
+# every loop iteration.
+
+@lru_cache(maxsize=256)
+def _cached_tools(
+    user_id: str,
+    scope_type: str,
+    memory_ids: tuple,
+):
+
+    return tuple(
+        _build_tools(
+            {
+                "user_id": user_id,
+                "scope_type": scope_type,
+                "memory_ids": (
+                    list(memory_ids)
+                    if scope_type == "memory"
+                    else None
+                ),
+            }
+        )
+    )
+
+
+def create_tools(
+    scope: MemoryScope,
+):
+
+    # Validate every time; only the construction is cached.
+    _validate_scope(
+        scope
+    )
+
+    return list(
+        _cached_tools(
+            scope["user_id"],
+            scope["scope_type"],
+            tuple(scope["memory_ids"] or ()),
+        )
+    )
