@@ -80,6 +80,30 @@ class Settings:
     )
 
     # ============================================================
+    # Knowledge Base Preparation (Phase 1 contracts/configuration)
+    # ============================================================
+
+    # Preserve the existing chunking defaults during the contract phase.
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
+    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+
+    # Preserve the current embedding model; changing it may require re-indexing.
+    EMBEDDING_MODEL = os.getenv(
+        "EMBEDDING_MODEL",
+        "sentence-transformers/all-MiniLM-L6-v2",
+    )
+
+    # Indexing and worker settings are configuration-only in Phase 1.
+    EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    INGESTION_MAX_ATTEMPTS = int(os.getenv("INGESTION_MAX_ATTEMPTS", "3"))
+    INGESTION_RETRY_DELAY_SECONDS = float(
+        os.getenv("INGESTION_RETRY_DELAY_SECONDS", "5")
+    )
+    INGESTION_WORKER_CONCURRENCY = int(
+        os.getenv("INGESTION_WORKER_CONCURRENCY", "1")
+    )
+
+    # ============================================================
     # Safety
     # ============================================================
 
@@ -161,4 +185,32 @@ class Settings:
     )
 
 
+
+    # ============================================================
+    # Phase 3 - Document extraction options
+    # ============================================================
+
+    # OCR uses the configured Ollama vision provider. Disabled by default
+    # to avoid unexpected external calls or costs for scanned PDFs.
+    PDF_OCR_ENABLED = os.getenv("PDF_OCR_ENABLED", "false").lower() == "true"
+    PDF_OCR_DPI = int(os.getenv("PDF_OCR_DPI", "144"))
+    PDF_OCR_MIN_PAGE_TEXT_CHARS = int(os.getenv("PDF_OCR_MIN_PAGE_TEXT_CHARS", "20"))
+
+    def validate_knowledge_base_settings(self):
+        if self.CHUNK_SIZE <= 0:
+            raise ValueError("CHUNK_SIZE must be greater than zero")
+        if self.CHUNK_OVERLAP < 0 or self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
+            raise ValueError("CHUNK_OVERLAP must be >= 0 and smaller than CHUNK_SIZE")
+        if self.EMBEDDING_BATCH_SIZE <= 0:
+            raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero")
+        if self.INGESTION_MAX_ATTEMPTS <= 0:
+            raise ValueError("INGESTION_MAX_ATTEMPTS must be greater than zero")
+        if self.INGESTION_RETRY_DELAY_SECONDS < 0:
+            raise ValueError("INGESTION_RETRY_DELAY_SECONDS cannot be negative")
+        if self.INGESTION_WORKER_CONCURRENCY <= 0:
+            raise ValueError("INGESTION_WORKER_CONCURRENCY must be greater than zero")
+
+
 settings = Settings()
+settings.validate_knowledge_base_settings()
+

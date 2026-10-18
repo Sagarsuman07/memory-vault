@@ -109,14 +109,27 @@ def index_memory(
 
     for index, chunk in enumerate(chunks):
 
+        # Preserve safe scalar context produced by the chunker. Chroma does
+        # not accept nested dictionaries/lists as metadata values.
+        chunk_metadata = {
+            key: value
+            for key, value in (chunk.metadata or {}).items()
+            if isinstance(key, str)
+            and key.strip()
+            and value is not None
+            and isinstance(value, (str, bool, int, float))
+        }
+        # Trust application-owned identity fields over any source metadata.
+        chunk_metadata.update({
+            "memory_id": memory_id,
+            "user_id": user_id,
+            "memory_type": memory_type,
+            "chunk_index": index,
+        })
+
         document = Document(
             page_content=chunk.page_content,
-            metadata={
-                "memory_id": memory_id,
-                "user_id": user_id,
-                "memory_type": memory_type,
-                "chunk_index": index,
-            },
+            metadata=chunk_metadata,
         )
 
         documents.append(

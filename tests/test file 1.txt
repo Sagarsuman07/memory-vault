@@ -1,0 +1,13 @@
+Phase   3 Memory Vault Test
+
+   This     sentence has  
+   
+      extra   spaces.
+
+Order ID: ORD-2048
+Amount: 1250.50
+Status: NOT approved
+Date: 2026-10-18
+
+First line.
+Second line.

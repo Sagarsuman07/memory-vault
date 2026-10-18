@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 import io
+import json
 import uuid
 import wave
 
@@ -10,6 +11,7 @@ from langchain_groq import ChatGroq
 from config.settings import settings
 
 from database.models import Memory
+from memory.memory_models import SourceDocument
 
 from database.repositories import (
     create_memory,
@@ -17,10 +19,18 @@ from database.repositories import (
     get_all_memories,
     update_memory as update_memory_record,
     delete_memory as delete_memory_record,
+    create_ingestion_source,
+    find_duplicate_content,
+    get_ingestion_source_for_memory,
+    update_ingestion_source,
 )
 
 from ingestion.pipeline import (
+    SourceValidationError,
+    detect_source_change,
+    discover_upload,
     extract_content,
+    process_content,
     get_memory_type,
 )
 
@@ -74,139 +84,132 @@ MAX_FILE_SIZE = (
 
 
 # ============================================================
-# Create Memory
+# Create Memory — Phase 2 source discovery and tracking
 # ============================================================
 
 def create_new_memory(
     uploaded_file,
     title: str,
     user_id: str,
-    progress_callback: Optional[
-        Callable[[str], None]
-    ] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ):
+    """Validate, track, load, and index one uploaded memory.
+
+    Identical content is recorded as a duplicate candidate but is never merged
+    automatically: each intentional upload receives its own memory ID.
+    """
     if uploaded_file is None:
-        raise ValueError(
-            "No file was provided."
-        )
-
+        raise ValueError("No file was provided.")
     if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
-
+        raise ValueError("User ID cannot be empty.")
     if not title or not title.strip():
-        raise ValueError(
-            "Memory title cannot be empty."
-        )
+        raise ValueError("Memory title cannot be empty.")
 
-    file_name = uploaded_file.name
-
-    extension = Path(
-        file_name
-    ).suffix.lower()
-
-    if extension not in ALLOWED_EXTENSIONS:
-        raise ValueError(
-            f"Unsupported file type: {extension}"
-        )
-
+    file_name = getattr(uploaded_file, "name", "")
     file_bytes = uploaded_file.getvalue()
-
-    if not file_bytes:
-        raise ValueError(
-            "The selected file is empty."
-        )
-
-    if len(file_bytes) > MAX_FILE_SIZE:
-        raise ValueError(
-            "File size cannot exceed 10 MB."
-        )
-
-    memory_id = str(
-        uuid.uuid4()
-    )
-
-    memory_type = get_memory_type(
-        file_name
-    )
-
-    file_path = (
-        UPLOAD_DIR
-        / f"{memory_id}{extension}"
-    )
-
-    file_path.write_bytes(
-        file_bytes
-    )
+    if not isinstance(file_bytes, (bytes, bytearray, memoryview)):
+        raise ValueError("Uploaded file content must be bytes.")
+    file_bytes = bytes(file_bytes)
+    memory_id = str(uuid.uuid4())
+    source_record_created = False
+    file_path = None
+    stage = "validation"
 
     try:
+        # Discovery includes extension, size, basic format-integrity, and hash checks.
+        descriptor = discover_upload(
+            file_name,
+            file_bytes,
+            upload_dir=UPLOAD_DIR,
+            source_id=memory_id,
+            max_file_size=MAX_FILE_SIZE,
+        )
+        memory_type = get_memory_type(descriptor.file_name)
+        file_path = Path(descriptor.file_path)
 
-        # ====================================================
-        # Extracting
-        # ====================================================
-
-        if progress_callback:
-            progress_callback(
-                "extracting"
+        duplicate_of_memory_id = find_duplicate_content(
+            user_id,
+            descriptor.sha256,
+        )
+        warnings = []
+        if duplicate_of_memory_id:
+            warnings.append(
+                "Identical content already exists in another memory; this upload was retained as a separate memory."
             )
 
-        extracted_text = extract_content(
-            str(file_path)
+        create_ingestion_source(
+            source_id=descriptor.source_id,
+            user_id=user_id,
+            original_file_name=descriptor.file_name,
+            extension=descriptor.extension,
+            media_type=descriptor.media_type,
+            size_bytes=descriptor.size_bytes,
+            sha256=descriptor.sha256,
+            status="validated",
+            stored_file_path=str(file_path),
+            duplicate_of_memory_id=duplicate_of_memory_id,
+            warnings_json=json.dumps(warnings),
+        )
+        source_record_created = True
+
+        # Only write the file after validation and source metadata persistence.
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(file_bytes)
+
+        stage = "extraction"
+        if progress_callback:
+            progress_callback("extracting")
+        processed = process_content(str(file_path))
+        source_document = SourceDocument(
+            source_id=descriptor.source_id,
+            memory_id=memory_id,
+            file_name=descriptor.file_name,
+            media_type=descriptor.media_type,
+            text=processed.text,
+            metadata=dict(processed.metadata),
+            extraction_status=processed.status,
+            warnings=tuple(processed.warnings),
+        )
+        extracted_text = source_document.text
+        combined_warnings = list(warnings)
+        combined_warnings.extend(source_document.warnings)
+        update_ingestion_source(
+            descriptor.source_id,
+            user_id,
+            metadata_json=json.dumps(dict(source_document.metadata), ensure_ascii=False),
+            warnings_json=json.dumps(list(dict.fromkeys(combined_warnings)), ensure_ascii=False),
         )
 
-        if (
-            not extracted_text
-            or not extracted_text.strip()
-        ):
-            raise ValueError(
-                "No content could be extracted "
-                "from the file."
-            )
-
-        # ====================================================
-        # SQLite Memory
-        # ====================================================
-
-        now = datetime.now(
-            timezone.utc
-        ).isoformat()
-
+        now = datetime.now(timezone.utc).isoformat()
         memory = Memory(
             id=memory_id,
             user_id=user_id,
             memory_type=memory_type,
             title=title.strip(),
-            file_name=file_name,
+            file_name=descriptor.file_name,
             file_path=str(file_path),
             summary=None,
             extracted_text=extracted_text,
             created_at=now,
             updated_at=now,
         )
-
-        create_memory(
-            memory
+        create_memory(memory)
+        update_ingestion_source(
+            descriptor.source_id,
+            user_id,
+            memory_id=memory_id,
+            status="loaded",
+            stored_file_path=str(file_path),
+            error_category=None,
+            error_message=None,
         )
 
-        # ====================================================
-        # Chunking
-        # ====================================================
-
-        chunks = split_text(
-            extracted_text
-        )
-
+        stage = "chunking"
+        chunks = split_text(extracted_text, metadata=source_document.metadata)
         if not chunks:
-            raise ValueError(
-                "No chunks could be created "
-                "for indexing."
-            )
+            raise ValueError("No chunks could be created for indexing.")
 
-        # ====================================================
-        # Embedding + Indexing
-        # ====================================================
-
+        stage = "indexing"
         index_memory(
             memory_id=memory.id,
             user_id=memory.user_id,
@@ -215,53 +218,111 @@ def create_new_memory(
             progress_callback=progress_callback,
         )
 
-        # ====================================================
-        # Done
-        # ====================================================
-
         if progress_callback:
-            progress_callback(
-                "done"
-            )
-
+            progress_callback("done")
         return memory
 
-    except Exception:
-
-        # Remove vectors.
-        try:
-
-            vector_store = get_vector_store()
-
-            vector_store.delete(
-                where={
-                    "memory_id": memory_id
-                }
-            )
-
-        except Exception:
-            pass
-
-        # Remove original file.
-        if file_path.exists():
-
+    except Exception as error:
+        # Validation errors before a source row exists are still recorded when
+        # possible, without retaining file contents or exposing external secrets.
+        if not source_record_created and user_id and user_id.strip():
             try:
-                file_path.unlink()
+                safe_name = Path(str(file_name).replace("\\", "/")).name or "unknown"
+                extension = Path(safe_name).suffix.lower() or "(none)"
+                from hashlib import sha256
+                from ingestion.discovery import get_media_type
+                try:
+                    media_type = get_media_type(safe_name)
+                except Exception:
+                    media_type = "application/octet-stream"
+                source_size = len(file_bytes)
+                create_ingestion_source(
+                    source_id=memory_id,
+                    user_id=user_id,
+                    original_file_name=safe_name,
+                    extension=extension,
+                    media_type=media_type,
+                    size_bytes=source_size,
+                    sha256=sha256(file_bytes).hexdigest(),
+                    status="failed",
+                    error_category="validation" if isinstance(error, (ValueError, SourceValidationError)) else "internal",
+                    error_message=(str(error) if isinstance(error, (ValueError, SourceValidationError)) else "Source discovery failed unexpectedly."),
+                )
+                source_record_created = True
             except Exception:
+                # The original ingestion error remains the primary exception.
                 pass
 
-        # Remove database record.
+        # Remove any partial vector records associated with this newly generated ID.
         try:
-
-            delete_memory_record(
-                memory_id,
-                user_id,
-            )
-
+            vector_store = get_vector_store()
+            vector_store.delete(where={"memory_id": memory_id})
         except Exception:
             pass
 
+        if file_path is not None and file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
+
+        try:
+            delete_memory_record(memory_id, user_id)
+        except Exception:
+            pass
+
+        if source_record_created:
+            if stage == "extraction":
+                category = "extraction"
+                safe_message = "Source could not be loaded by the configured processor."
+            elif stage == "chunking":
+                category = "chunking"
+                safe_message = "Loaded source could not be prepared for chunking."
+            elif stage == "indexing":
+                category = "indexing"
+                safe_message = "Memory indexing failed."
+            elif isinstance(error, (ValueError, SourceValidationError)):
+                category = "validation"
+                safe_message = str(error)
+            else:
+                category = "internal"
+                safe_message = "An unexpected ingestion error occurred."
+            try:
+                update_ingestion_source(
+                    memory_id,
+                    user_id,
+                    memory_id=None,
+                    stored_file_path=None,
+                    status="failed",
+                    error_category=category,
+                    error_message=safe_message,
+                )
+            except Exception:
+                pass
         raise
+
+
+def check_memory_source_change(
+    memory_id: str,
+    user_id: str,
+    file_path: Optional[str] = None,
+):
+    """Compare a tracked memory source's saved hash with current file contents.
+
+    This reports whether a source changed; it deliberately does not reprocess or
+    re-index it automatically. That update workflow belongs to later phases.
+    """
+    if not memory_id or not memory_id.strip():
+        raise ValueError("Memory ID cannot be empty.")
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    source = get_ingestion_source_for_memory(memory_id, user_id)
+    if source is None:
+        raise ValueError("No ingestion source is tracked for this memory.")
+    current_path = file_path or source.stored_file_path
+    if not current_path:
+        raise ValueError("The source file path is unavailable.")
+    return detect_source_change(source.sha256, current_path, source.source_id)
 
 
 # ============================================================
