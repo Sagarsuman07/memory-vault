@@ -9,8 +9,10 @@ DATABASE_PATH = Path(settings.DATABASE_PATH)
 
 def get_connection():
     """Open a SQLite connection using the configured application database."""
-    connection = sqlite3.connect(DATABASE_PATH, timeout=30)
+    timeout_ms = max(0, int(getattr(settings, "SQLITE_BUSY_TIMEOUT_MS", 30000)))
+    connection = sqlite3.connect(DATABASE_PATH, timeout=timeout_ms / 1000.0)
     connection.row_factory = sqlite3.Row
+    connection.execute(f"PRAGMA busy_timeout={timeout_ms}")
     return connection
 
 
@@ -18,6 +20,10 @@ def initialize_database():
     """Create missing tables only; existing memories and vectors are untouched."""
     connection = get_connection()
     try:
+        # WAL improves reader/writer coexistence. Set it once during DB init;
+        # do not issue journal_mode changes from every worker connection.
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
         cursor = connection.cursor()
         cursor.execute(
             """

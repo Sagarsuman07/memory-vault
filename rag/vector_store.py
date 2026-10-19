@@ -4,6 +4,7 @@ import math
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
+import threading
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from config.settings import settings
@@ -11,6 +12,13 @@ from rag.embeddings import get_embeddings
 
 CHROMA_DIR = Path(".chroma")
 COLLECTION_NAME = "memory_vault"
+
+# One lock protects the shared Chroma collection across worker threads. Keep it
+# process-wide; a lock created per job would not coordinate concurrent writes.
+_CHROMA_LOCK = threading.RLock()
+_EMBEDDING_LOCK = threading.Semaphore(
+    max(1, int(getattr(settings, "EMBEDDING_CONCURRENCY", 1)))
+)
 
 
 def get_vector_store():
@@ -40,7 +48,10 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
     dimension = existing_dimension
     for start in range(0, len(texts), batch_size):
         batch = list(texts[start:start + batch_size])
-        raw = embedder.embed_documents(batch)
+        # Release the shared embedding slot after each batch, so a small memory
+        # can make progress between batches of a large memory.
+        with _EMBEDDING_LOCK:
+            raw = embedder.embed_documents(batch)
         vectors = _as_list(raw)
         if len(vectors) != len(batch):
             raise ValueError("Embedding response count does not match input batch.")
@@ -136,7 +147,7 @@ def _rollback(collection: Any, memory_id: str, old: dict[str, list],
 def index_memory(memory_id: str, user_id: str, memory_type: str,
                  chunks: list[Document],
                  progress_callback: Optional[Callable[[str], None]] = None) -> int:
-    """Batch-embed and safely replace one memory's deterministic Chroma records."""
+    """Embed independently, then serialize the Chroma replace/verify transaction."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
     if not user_id or not user_id.strip():
@@ -152,11 +163,9 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
         if not isinstance(text, str) or not text.strip():
             raise ValueError(f"Chunk {i} has empty or invalid text.")
         metadata = _safe_metadata(getattr(chunk, "metadata", None))
-        # Application-controlled identity fields always win.
         metadata.update({"memory_id": memory_id, "user_id": user_id,
                          "memory_type": memory_type, "chunk_index": i})
         documents.append(Document(page_content=text, metadata=metadata))
-        # Preserve the established ID format for compatibility.
         ids.append(f"{memory_id}_chunk_{i}")
 
     texts = [d.page_content for d in documents]
@@ -165,44 +174,64 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
     if batch_size <= 0:
         raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero.")
 
+    # Read the established collection dimension while protected from concurrent
+    # collection operations. Do not hold this lock during potentially slow model
+    # inference; different jobs can prepare their embeddings independently.
     collection = get_vector_store()._collection
-    old = _snapshot(collection, memory_id)
-    existing_dimension = _collection_dimension(collection)
-    try:
-        if progress_callback:
-            progress_callback("embedding")
-        vectors = _embed_batches(texts, get_embeddings(), batch_size, existing_dimension)
-        dimension = len(vectors[0])
-        if progress_callback:
-            progress_callback("indexing")
-        for start in range(0, len(ids), batch_size):
-            end = start + batch_size
-            collection.upsert(ids=ids[start:end], embeddings=vectors[start:end],
-                              documents=texts[start:end], metadatas=metadatas[start:end])
-        _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
-        stale = [x for x in old["ids"] if x not in set(ids)]
-        if stale:
-            collection.delete(ids=stale)
-        final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
-        final_ids = list(final.get("ids") or [])
-        if set(final_ids) != set(ids) or len(final_ids) != len(ids):
-            raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
-        return len(ids)
-    except Exception as error:
-        try:
-            _rollback(collection, memory_id, old, ids)
-        except Exception as rollback_error:
-            raise RuntimeError("Indexing failed and rollback also failed. Inspect/restore Chroma before retrying. "
-                               f"Indexing error: {error}; rollback error: {rollback_error}") from error
-        raise
+    with _CHROMA_LOCK:
+        existing_dimension = _collection_dimension(collection)
 
+    if progress_callback:
+        progress_callback("embedding")
+    # The supplied rag/embeddings.py uses HuggingFaceEmbeddings locally, not an
+    # embedding API. _embed_batches limits local inference per batch to reduce
+    # CPU/RAM spikes while allowing other jobs between batches.
+    vectors = _embed_batches(texts, get_embeddings(), batch_size, existing_dimension)
+    dimension = len(vectors[0])
+
+    if progress_callback:
+        progress_callback("indexing")
+    # Snapshot + upsert + verify + stale cleanup + rollback are one critical
+    # section so two jobs cannot interleave writes to the shared collection.
+    with _CHROMA_LOCK:
+        old = _snapshot(collection, memory_id)
+        current_dimension = _collection_dimension(collection)
+        if current_dimension is not None and current_dimension != dimension:
+            raise ValueError(
+                f"Embedding dimension mismatch: collection has {current_dimension}, generated {dimension}."
+            )
+        try:
+            for start in range(0, len(ids), batch_size):
+                end = start + batch_size
+                collection.upsert(ids=ids[start:end], embeddings=vectors[start:end],
+                                  documents=texts[start:end], metadatas=metadatas[start:end])
+            _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
+            expected_ids = set(ids)
+            stale = [x for x in old["ids"] if x not in expected_ids]
+            if stale:
+                collection.delete(ids=stale)
+            final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
+            final_ids = list(final.get("ids") or [])
+            if set(final_ids) != expected_ids or len(final_ids) != len(expected_ids):
+                raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
+            return len(ids)
+        except Exception as error:
+            try:
+                _rollback(collection, memory_id, old, ids)
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    "Indexing failed and rollback also failed. Inspect/restore Chroma before retrying. "
+                    f"Indexing error: {error}; rollback error: {rollback_error}"
+                ) from error
+            raise
 
 def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None = None) -> dict[str, Any]:
     """Return a diagnostic report for indexed records belonging to one memory."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
-    data = get_vector_store()._collection.get(where={"memory_id": memory_id},
-                                               include=["embeddings", "documents", "metadatas"])
+    with _CHROMA_LOCK:
+        data = get_vector_store()._collection.get(where={"memory_id": memory_id},
+                                                   include=["embeddings", "documents", "metadatas"])
     ids = list(data.get("ids") or [])
     docs = list(data.get("documents") or [])
     metas = list(data.get("metadatas") or [])

@@ -8,6 +8,7 @@ from config.settings import settings
 from database.database import initialize_database
 
 from memory.async_ingestion import enqueue_new_memory
+from database.database import get_connection
 
 
 # ============================================================
@@ -28,6 +29,53 @@ st.set_page_config(
 initialize_database()
 
 USER_ID = settings.DEMO_USER_ID
+
+
+# ============================================================
+# Simplified preparation status
+# ============================================================
+
+_ACTIVE_JOB_STATUSES = ("queued", "running", "retrying")
+
+
+def get_active_preparation_count(user_id: str) -> int:
+    """Return the number of preparation jobs that are queued or in progress."""
+    connection = get_connection()
+    try:
+        placeholders = ", ".join("?" for _ in _ACTIVE_JOB_STATUSES)
+        row = connection.execute(
+            f"SELECT COUNT(*) AS total FROM preparation_jobs "
+            f"WHERE user_id = ? AND status IN ({placeholders})",
+            (user_id, *_ACTIVE_JOB_STATUSES),
+        ).fetchone()
+        return int(row["total"] if row else 0)
+    finally:
+        connection.close()
+
+
+def render_preparation_status(user_id: str) -> None:
+    """Show only the requested two-state knowledge-base status text."""
+    try:
+        count = get_active_preparation_count(user_id)
+    except Exception:
+        st.caption("Memory base status is temporarily unavailable.")
+        return
+
+    if count:
+        st.info(f"Memory base preparing ({count})")
+    else:
+        st.success("Memory base prepared")
+
+
+def _install_status_refresh(function):
+    fragment = getattr(st, "fragment", None)
+    if fragment is None:
+        return function
+    return fragment(run_every="2s")(function)
+
+
+render_preparation_status = _install_status_refresh(render_preparation_status)
+render_preparation_status(USER_ID)
 
 
 # ============================================================
@@ -247,25 +295,6 @@ if st.button(
     st.switch_page(
         "app.py"
     )
-
-
-# ============================================================
-# Success Message
-# ============================================================
-
-queued_memory = st.session_state.get("memory_queued")
-if queued_memory:
-    st.info(
-        "Upload saved. Memory preparation is queued or running in the background; "
-        "it is not marked ready until extraction and indexing finish."
-    )
-    st.caption(f"Memory ID: {queued_memory['memory_id']}")
-    st.caption(f"Preparation Job ID: {queued_memory['job_id']}")
-    if st.button("Dismiss queue confirmation", key="dismiss_queue_confirmation"):
-        st.session_state.pop("memory_queued", None)
-        st.rerun()
-
-    
 
 
 # ============================================================

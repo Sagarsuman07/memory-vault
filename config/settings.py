@@ -100,8 +100,15 @@ class Settings:
         os.getenv("INGESTION_RETRY_DELAY_SECONDS", "5")
     )
     INGESTION_WORKER_CONCURRENCY = int(
-        os.getenv("INGESTION_WORKER_CONCURRENCY", "1")
+        os.getenv("INGESTION_WORKER_CONCURRENCY", "2")
     )
+
+    # Keep local embedding inference from running in several threads at once.
+    # This is conservative for the current HuggingFaceEmbeddings implementation.
+    EMBEDDING_CONCURRENCY = int(os.getenv("EMBEDDING_CONCURRENCY", "1"))
+
+    # SQLite waits briefly for another writer instead of failing immediately.
+    SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
 
     # ============================================================
     # Safety
@@ -209,6 +216,10 @@ class Settings:
             raise ValueError("INGESTION_RETRY_DELAY_SECONDS cannot be negative")
         if self.INGESTION_WORKER_CONCURRENCY <= 0:
             raise ValueError("INGESTION_WORKER_CONCURRENCY must be greater than zero")
+        if self.EMBEDDING_CONCURRENCY <= 0:
+            raise ValueError("EMBEDDING_CONCURRENCY must be greater than zero")
+        if self.SQLITE_BUSY_TIMEOUT_MS < 0:
+            raise ValueError("SQLITE_BUSY_TIMEOUT_MS cannot be negative")
 
 
 settings = Settings()
