@@ -42,20 +42,53 @@ from rag.vector_store import index_memory
 
 
 class _Collection:
+    """Small in-memory Chroma collection fake for the Phase 4 contract test."""
     def __init__(self):
+        self.records = {}
         self.kwargs = None
 
-    def add(self, **kwargs):
-        self.kwargs = kwargs
+    def get(self, ids=None, where=None, limit=None, include=None):
+        selected = list(self.records)
+        if ids is not None:
+            wanted = set(ids)
+            selected = [record_id for record_id in selected if record_id in wanted]
+        if where:
+            selected = [
+                record_id for record_id in selected
+                if all(self.records[record_id]["metadatas"].get(key) == value
+                       for key, value in where.items())
+            ]
+        if limit is not None:
+            selected = selected[:limit]
+        result = {"ids": selected}
+        if include is None or "embeddings" in include:
+            result["embeddings"] = [self.records[i]["embeddings"] for i in selected]
+        if include is None or "documents" in include:
+            result["documents"] = [self.records[i]["documents"] for i in selected]
+        if include is None or "metadatas" in include:
+            result["metadatas"] = [self.records[i]["metadatas"] for i in selected]
+        return result
+
+    def upsert(self, ids, embeddings, documents, metadatas):
+        self.kwargs = {
+            "ids": list(ids), "embeddings": embeddings,
+            "documents": list(documents), "metadatas": [dict(m) for m in metadatas],
+        }
+        for record_id, embedding, document, metadata in zip(ids, embeddings, documents, metadatas):
+            self.records[record_id] = {
+                "embeddings": list(embedding), "documents": document,
+                "metadatas": dict(metadata),
+            }
+
+    def delete(self, ids):
+        for record_id in ids:
+            self.records.pop(record_id, None)
 
 
 class _VectorStore:
+    """Expose the fake collection through the same attribute as LangChain Chroma."""
     def __init__(self):
         self._collection = _Collection()
-        self.deleted = []
-
-    def delete(self, **kwargs):
-        self.deleted.append(kwargs)
 
 
 class _Embeddings:
@@ -82,7 +115,11 @@ class TestPhase4VectorMetadata(unittest.TestCase):
             count = index_memory("memory-123", "user-456", "document", chunks)
 
         self.assertEqual(count, 1)
-        metadata = store._collection.kwargs["metadatas"][0]
+        record_id = "memory-123_chunk_0"
+        record = store._collection.records[record_id]
+        metadata = record["metadatas"]
+        self.assertEqual(record["documents"], "Flight AB123 departs at 10:30 AM.")
+        self.assertEqual(len(record["embeddings"]), 2)
         self.assertEqual(metadata["source_page"], 2)
         self.assertEqual(metadata["section_title"], "Flight Details")
         self.assertEqual(metadata["document_type"], "pdf")
