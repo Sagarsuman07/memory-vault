@@ -79,6 +79,7 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             size_bytes=descriptor.size_bytes,
             sha256=descriptor.sha256,
             status="validated",
+            memory_id=memory_id,
             stored_file_path=str(file_path),
             duplicate_of_memory_id=duplicate_id,
             warnings_json=json.dumps(warnings, ensure_ascii=False),

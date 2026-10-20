@@ -1,0 +1,73 @@
+2026-10-20 20:19:29 INFO memory.background_worker: INGEST_JOB_START job_id=adbb0b35-f7e5-45a9-b08d-25f0ba29a9e6 memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 attempt=0
+2026-10-20 20:19:30 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 candidate_memory_id=None
+2026-10-20 20:19:30 INFO memory.background_worker: INGEST_DUPLICATE_FALLBACK memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 reason=no_completed_same_user_duplicate_found
+2026-10-20 20:19:30 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=0.001 reused=False
+2026-10-20 20:22:52 INFO memory.background_worker: INGEST_TIMING stage=extraction memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 file=c6c62c6b-f572-4717-b2bf-357f9b96b609.pdf seconds=202.298 chars=611850
+2026-10-20 20:22:52 INFO memory.background_worker: INGEST_TIMING stage=chunking memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=0.217 chars=611850 chunks=895
+2026-10-20 20:22:53 INFO rag.vector_store: INGEST_TIMING stage=chroma_dimension_check seconds=0.008 dimension=384
+2026-10-20 20:23:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=1 batch_chunks=32 total_chunks=895 seconds=15.126
+2026-10-20 20:23:23 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=2 batch_chunks=32 total_chunks=895 seconds=14.780
+2026-10-20 20:23:40 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=3 batch_chunks=32 total_chunks=895 seconds=17.252
+2026-10-20 20:23:53 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=4 batch_chunks=32 total_chunks=895 seconds=12.639
+2026-10-20 20:24:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=5 batch_chunks=32 total_chunks=895 seconds=15.634
+2026-10-20 20:24:22 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=6 batch_chunks=32 total_chunks=895 seconds=13.825
+2026-10-20 20:24:38 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=7 batch_chunks=32 total_chunks=895 seconds=15.486
+2026-10-20 20:24:52 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=8 batch_chunks=32 total_chunks=895 seconds=14.305
+2026-10-20 20:25:04 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=9 batch_chunks=32 total_chunks=895 seconds=12.176
+2026-10-20 20:25:19 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=10 batch_chunks=32 total_chunks=895 seconds=14.244
+2026-10-20 20:25:36 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=11 batch_chunks=32 total_chunks=895 seconds=17.354
+2026-10-20 20:25:52 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=12 batch_chunks=32 total_chunks=895 seconds=15.589
+2026-10-20 20:26:06 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=13 batch_chunks=32 total_chunks=895 seconds=14.290
+2026-10-20 20:26:22 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=14 batch_chunks=32 total_chunks=895 seconds=15.555
+2026-10-20 20:26:38 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=15 batch_chunks=32 total_chunks=895 seconds=16.047
+2026-10-20 20:26:54 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=16 batch_chunks=32 total_chunks=895 seconds=16.088
+2026-10-20 20:27:10 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=17 batch_chunks=32 total_chunks=895 seconds=16.083
+2026-10-20 20:27:25 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=18 batch_chunks=32 total_chunks=895 seconds=14.101
+2026-10-20 20:27:39 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=19 batch_chunks=32 total_chunks=895 seconds=14.172
+2026-10-20 20:27:53 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=20 batch_chunks=32 total_chunks=895 seconds=13.871
+2026-10-20 20:28:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=21 batch_chunks=32 total_chunks=895 seconds=15.281
+2026-10-20 20:28:20 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=22 batch_chunks=32 total_chunks=895 seconds=12.249
+2026-10-20 20:28:36 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=23 batch_chunks=32 total_chunks=895 seconds=15.895
+2026-10-20 20:28:50 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=24 batch_chunks=32 total_chunks=895 seconds=13.296
+2026-10-20 20:29:04 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=25 batch_chunks=32 total_chunks=895 seconds=14.506
+2026-10-20 20:29:18 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=26 batch_chunks=32 total_chunks=895 seconds=13.918
+2026-10-20 20:29:33 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=27 batch_chunks=32 total_chunks=895 seconds=14.479
+2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=28 batch_chunks=31 total_chunks=895 seconds=15.249
+2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=embedding_total seconds=413.489 chunks=895 batches=28 dimension=384
+2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=chroma_lock_wait memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 seconds=0.000
+2026-10-20 20:30:03 INFO rag.vector_store: INGEST_TIMING stage=chroma_indexing memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 batches=28 snapshot_seconds=0.003 write_seconds=11.934 verify_seconds=1.926 cleanup_seconds=0.669 lock_held_seconds=14.541
+2026-10-20 20:30:03 INFO memory.background_worker: INGEST_TIMING stage=index_memory_total memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=430.206 chunks=895
+2026-10-20 20:30:04 INFO memory.background_worker: INGEST_TIMING stage=final_index_verification memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=1.646 records=895 valid=True
+2026-10-20 20:30:05 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=adbb0b35-f7e5-45a9-b08d-25f0ba29a9e6 memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 reused_duplicate=False total_seconds=635.516 chunks=895
+2026-10-20 20:30:36 INFO memory.background_worker: INGEST_JOB_START job_id=65b30190-38d0-41e6-892a-7c0a00ad0f84 memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 attempt=0
+2026-10-20 20:30:36 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 candidate_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609
+2026-10-20 20:30:37 INFO memory.background_worker: INGEST_DUPLICATE_CANDIDATE memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 source_index_valid=True source_chunks=895
+2026-10-20 20:30:55 INFO rag.vector_store: INGEST_TIMING stage=clone_memory_index source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 target_memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 chunks=895 seconds=18.255
+2026-10-20 20:30:56 INFO memory.background_worker: INGEST_TIMING stage=duplicate_vector_clone memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 seconds=18.276
+2026-10-20 20:30:57 INFO memory.background_worker: INGEST_TIMING stage=duplicate_target_verification memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 seconds=1.269 valid=True records=895
+2026-10-20 20:30:57 INFO memory.background_worker: INGEST_DUPLICATE_REUSE memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 extraction_skipped=true embedding_skipped=true
+2026-10-20 20:30:57 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 seconds=20.419 reused=True
+2026-10-20 20:30:57 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=65b30190-38d0-41e6-892a-7c0a00ad0f84 memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 reused_duplicate=True total_seconds=20.470 chunks=895
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_JOB_START job_id=95dde42a-c9ea-40c8-a177-3640b3466cee memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 attempt=0
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 candidate_memory_id=None
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_DUPLICATE_FALLBACK memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 reason=no_completed_same_user_duplicate_found
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.001 reused=False
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=extraction memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 file=e5e4c0c5-3277-49f5-a861-45b85e88e077.pdf seconds=0.338 chars=23816
+2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=chunking memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.008 chars=23816 chunks=30
+2026-10-20 20:31:39 INFO rag.vector_store: INGEST_TIMING stage=chroma_dimension_check seconds=0.007 dimension=384
+2026-10-20 20:31:54 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=1 batch_chunks=30 total_chunks=30 seconds=15.164
+2026-10-20 20:31:55 INFO rag.vector_store: INGEST_TIMING stage=embedding_total seconds=15.164 chunks=30 batches=1 dimension=384
+2026-10-20 20:31:55 INFO rag.vector_store: INGEST_TIMING stage=chroma_lock_wait memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 seconds=0.000
+2026-10-20 20:31:56 INFO rag.vector_store: INGEST_TIMING stage=chroma_indexing memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 batches=1 snapshot_seconds=0.005 write_seconds=1.086 verify_seconds=0.016 cleanup_seconds=0.020 lock_held_seconds=1.130
+2026-10-20 20:31:56 INFO memory.background_worker: INGEST_TIMING stage=index_memory_total memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=16.566 chunks=30
+2026-10-20 20:31:56 INFO memory.background_worker: INGEST_TIMING stage=final_index_verification memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.723 records=30 valid=True
+2026-10-20 20:31:57 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=95dde42a-c9ea-40c8-a177-3640b3466cee memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 reused_duplicate=False total_seconds=18.446 chunks=30
+2026-10-20 20:32:25 INFO memory.background_worker: INGEST_JOB_START job_id=40fb635d-ad3d-4435-8cb6-481b5bc89fa4 memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 attempt=0
+2026-10-20 20:32:25 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 candidate_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077
+2026-10-20 20:32:26 INFO memory.background_worker: INGEST_DUPLICATE_CANDIDATE memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 source_index_valid=True source_chunks=30
+2026-10-20 20:32:27 INFO rag.vector_store: INGEST_TIMING stage=clone_memory_index source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 target_memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 chunks=30 seconds=0.582
+2026-10-20 20:32:27 INFO memory.background_worker: INGEST_TIMING stage=duplicate_vector_clone memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 seconds=0.584
+2026-10-20 20:32:28 INFO memory.background_worker: INGEST_TIMING stage=duplicate_target_verification memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 seconds=1.255 valid=True records=30
+2026-10-20 20:32:28 INFO memory.background_worker: INGEST_DUPLICATE_REUSE memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 extraction_skipped=true embedding_skipped=true
+2026-10-20 20:32:28 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 seconds=3.313 reused=True
+2026-10-20 20:32:28 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=40fb635d-ad3d-4435-8cb6-481b5bc89fa4 memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 reused_duplicate=True total_seconds=3.663 chunks=30

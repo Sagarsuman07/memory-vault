@@ -1,6 +1,8 @@
 """Safe, batched, verifiable Chroma indexing for Memory Vault."""
 from __future__ import annotations
 import math
+import logging
+import time
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -8,7 +10,12 @@ import threading
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from config.settings import settings
+from config.logging_config import configure_logging
 from rag.embeddings import get_embeddings
+
+configure_logging()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 CHROMA_DIR = Path(".chroma")
 COLLECTION_NAME = "memory_vault"
@@ -46,12 +53,19 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
         raise ValueError("Cannot generate embeddings for an empty text list.")
     result: list[list[float]] = []
     dimension = existing_dimension
+    total_embedding_seconds = 0.0
+    batch_count = 0
     for start in range(0, len(texts), batch_size):
         batch = list(texts[start:start + batch_size])
         # Release the shared embedding slot after each batch, so a small memory
         # can make progress between batches of a large memory.
+        batch_started = time.perf_counter()
         with _EMBEDDING_LOCK:
             raw = embedder.embed_documents(batch)
+        batch_seconds = time.perf_counter() - batch_started
+        total_embedding_seconds += batch_seconds
+        batch_count += 1
+        logger.info("INGEST_TIMING stage=embedding_batch batch=%d batch_chunks=%d total_chunks=%d seconds=%.3f", batch_count, len(batch), len(texts), batch_seconds)
         vectors = _as_list(raw)
         if len(vectors) != len(batch):
             raise ValueError("Embedding response count does not match input batch.")
@@ -67,6 +81,7 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
             if len(vector) != dimension:
                 raise ValueError(f"Embedding dimension mismatch: expected {dimension}, received {len(vector)}.")
             result.append([float(v) for v in vector])
+    logger.info("INGEST_TIMING stage=embedding_total seconds=%.3f chunks=%d batches=%d dimension=%s", total_embedding_seconds, len(texts), batch_count, dimension)
     return result
 
 
@@ -178,8 +193,10 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
     # collection operations. Do not hold this lock during potentially slow model
     # inference; different jobs can prepare their embeddings independently.
     collection = get_vector_store()._collection
+    dimension_check_started = time.perf_counter()
     with _CHROMA_LOCK:
         existing_dimension = _collection_dimension(collection)
+    logger.info("INGEST_TIMING stage=chroma_dimension_check seconds=%.3f dimension=%s", time.perf_counter() - dimension_check_started, existing_dimension)
 
     if progress_callback:
         progress_callback("embedding")
@@ -193,19 +210,31 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
         progress_callback("indexing")
     # Snapshot + upsert + verify + stale cleanup + rollback are one critical
     # section so two jobs cannot interleave writes to the shared collection.
+    transaction_started = time.perf_counter()
     with _CHROMA_LOCK:
+        lock_acquired_at = time.perf_counter()
+        logger.info("INGEST_TIMING stage=chroma_lock_wait memory_id=%s chunks=%d seconds=%.3f", memory_id, len(ids), lock_acquired_at - transaction_started)
+        snapshot_started = time.perf_counter()
         old = _snapshot(collection, memory_id)
+        snapshot_seconds = time.perf_counter() - snapshot_started
         current_dimension = _collection_dimension(collection)
         if current_dimension is not None and current_dimension != dimension:
             raise ValueError(
                 f"Embedding dimension mismatch: collection has {current_dimension}, generated {dimension}."
             )
         try:
+            write_started = time.perf_counter()
+            write_batches = 0
             for start in range(0, len(ids), batch_size):
                 end = start + batch_size
                 collection.upsert(ids=ids[start:end], embeddings=vectors[start:end],
                                   documents=texts[start:end], metadatas=metadatas[start:end])
+                write_batches += 1
+            write_seconds = time.perf_counter() - write_started
+            verify_started = time.perf_counter()
             _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
+            verify_seconds = time.perf_counter() - verify_started
+            cleanup_started = time.perf_counter()
             expected_ids = set(ids)
             stale = [x for x in old["ids"] if x not in expected_ids]
             if stale:
@@ -214,16 +243,182 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
             final_ids = list(final.get("ids") or [])
             if set(final_ids) != expected_ids or len(final_ids) != len(expected_ids):
                 raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
+            cleanup_seconds = time.perf_counter() - cleanup_started
+            logger.info("INGEST_TIMING stage=chroma_indexing memory_id=%s chunks=%d batches=%d snapshot_seconds=%.3f write_seconds=%.3f verify_seconds=%.3f cleanup_seconds=%.3f lock_held_seconds=%.3f", memory_id, len(ids), write_batches, snapshot_seconds, write_seconds, verify_seconds, cleanup_seconds, time.perf_counter() - lock_acquired_at)
             return len(ids)
         except Exception as error:
+            logger.exception("INGEST_TIMING stage=chroma_indexing_failed memory_id=%s chunks=%d elapsed_seconds=%.3f", memory_id, len(ids), time.perf_counter() - lock_acquired_at)
             try:
+                rollback_started = time.perf_counter()
                 _rollback(collection, memory_id, old, ids)
+                logger.info("INGEST_TIMING stage=chroma_rollback memory_id=%s seconds=%.3f", memory_id, time.perf_counter() - rollback_started)
             except Exception as rollback_error:
                 raise RuntimeError(
                     "Indexing failed and rollback also failed. Inspect/restore Chroma before retrying. "
                     f"Indexing error: {error}; rollback error: {rollback_error}"
                 ) from error
             raise
+
+def get_memory_index_text(memory_id: str, user_id: str) -> str:
+    """Reconstruct stored text from this user's existing indexed chunks.
+
+    Used only to recover missing legacy SQL extracted_text during duplicate reuse.
+    It never calls the embedding model or modifies Chroma.
+    """
+    if not isinstance(memory_id, str) or not memory_id.strip():
+        raise ValueError("memory_id cannot be empty.")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id cannot be empty.")
+    collection = get_vector_store()._collection
+    with _CHROMA_LOCK:
+        data = collection.get(
+            where={"memory_id": memory_id},
+            include=["documents", "metadatas"],
+        )
+    documents = list(data.get("documents") or [])
+    metadatas = list(data.get("metadatas") or [])
+    if not documents or len(documents) != len(metadatas):
+        return ""
+    records: list[tuple[int, str]] = []
+    for document, metadata in zip(documents, metadatas):
+        metadata = metadata or {}
+        if metadata.get("memory_id") != memory_id or metadata.get("user_id") != user_id:
+            raise ValueError("Indexed chunks do not belong to the requested user and memory.")
+        index = metadata.get("chunk_index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("Indexed chunk metadata has an invalid chunk_index.")
+        if not isinstance(document, str) or not document.strip():
+            raise ValueError("Indexed chunk text is empty.")
+        records.append((index, document))
+    records.sort(key=lambda item: item[0])
+    indices = [index for index, _ in records]
+    if indices != list(range(len(records))):
+        raise ValueError("Indexed chunk sequence is incomplete or duplicated.")
+    return "\n\n".join(document for _, document in records)
+
+
+def clone_memory_index(
+    source_memory_id: str,
+    target_memory_id: str,
+    user_id: str,
+    memory_type: str,
+) -> int:
+    """Copy a verified memory's stored vectors to a new memory identity.
+
+    This deliberately reuses existing embeddings and document chunks. It never
+    modifies or deletes the source memory's Chroma records. The target write is
+    protected by the same lock, verified, and rolled back on failure.
+    """
+    for name, value in (("source_memory_id", source_memory_id),
+                        ("target_memory_id", target_memory_id),
+                        ("user_id", user_id), ("memory_type", memory_type)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} cannot be empty.")
+    if source_memory_id == target_memory_id:
+        raise ValueError("Source and target memory IDs must be different.")
+
+    clone_started = time.perf_counter()
+    collection = get_vector_store()._collection
+    with _CHROMA_LOCK:
+        source = collection.get(
+            where={"memory_id": source_memory_id},
+            include=["embeddings", "documents", "metadatas"],
+        )
+        source_ids = list(source.get("ids") or [])
+        source_docs = list(source.get("documents") or [])
+        source_metas = list(source.get("metadatas") or [])
+        source_vectors = _as_list(source.get("embeddings"))
+
+        if not source_ids:
+            raise ValueError("The source memory has no indexed vectors to reuse.")
+        if not (len(source_ids) == len(source_docs) == len(source_metas) == len(source_vectors)):
+            raise RuntimeError("Source vector records are incomplete; reuse was stopped safely.")
+
+        records = []
+        seen_indices: set[int] = set()
+        dimensions: set[int] = set()
+        for record_id, text, raw_meta, raw_vector in zip(
+            source_ids, source_docs, source_metas, source_vectors
+        ):
+            metadata = dict(raw_meta or {})
+            if metadata.get("memory_id") != source_memory_id:
+                raise ValueError("Source index contains a record with an unexpected memory ID.")
+            if metadata.get("user_id") != user_id:
+                raise ValueError("Source index does not belong to the requesting user.")
+            index = metadata.get("chunk_index")
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index in seen_indices:
+                raise ValueError("Source index has missing or duplicate chunk indices.")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("Source index contains an empty chunk.")
+            vector = [float(value) for value in _as_list(raw_vector)]
+            if not vector or any(not math.isfinite(value) for value in vector):
+                raise ValueError("Source index contains an invalid embedding vector.")
+            seen_indices.add(index)
+            dimensions.add(len(vector))
+            records.append((index, record_id, text, metadata, vector))
+
+        if seen_indices != set(range(len(records))):
+            raise ValueError("Source chunk indices are not contiguous; reuse was stopped safely.")
+        if len(dimensions) != 1:
+            raise ValueError("Source index contains inconsistent embedding dimensions.")
+        records.sort(key=lambda record: record[0])
+
+        ids: list[str] = []
+        texts: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+        vectors: list[list[float]] = []
+        for index, _source_id, text, source_metadata, vector in records:
+            target_id = f"{target_memory_id}_chunk_{index}"
+            metadata = dict(source_metadata)
+            metadata.update({
+                "memory_id": target_memory_id,
+                "user_id": user_id,
+                "memory_type": memory_type,
+                "chunk_index": index,
+            })
+            ids.append(target_id)
+            texts.append(text)
+            metadatas.append(_safe_metadata(metadata))
+            vectors.append(vector)
+
+        dimension = len(vectors[0])
+        collection_dimension = _collection_dimension(collection)
+        if collection_dimension is not None and collection_dimension != dimension:
+            raise ValueError(
+                f"Embedding dimension mismatch: collection has {collection_dimension}, source has {dimension}."
+            )
+
+        old = _snapshot(collection, target_memory_id)
+        try:
+            batch_size = max(1, int(getattr(settings, "EMBEDDING_BATCH_SIZE", 32)))
+            for start in range(0, len(ids), batch_size):
+                end = start + batch_size
+                collection.upsert(
+                    ids=ids[start:end],
+                    embeddings=vectors[start:end],
+                    documents=texts[start:end],
+                    metadatas=metadatas[start:end],
+                )
+            _verify_records(collection, target_memory_id, ids, texts, metadatas, dimension)
+            current = collection.get(where={"memory_id": target_memory_id}, include=["metadatas"])
+            current_ids = list(current.get("ids") or [])
+            if set(current_ids) != set(ids) or len(current_ids) != len(ids):
+                raise RuntimeError("Cloned index verification found missing or stale target records.")
+            stale = [record_id for record_id in old["ids"] if record_id not in set(ids)]
+            if stale:
+                collection.delete(ids=stale)
+            logger.info("INGEST_TIMING stage=clone_memory_index source_memory_id=%s target_memory_id=%s chunks=%d seconds=%.3f", source_memory_id, target_memory_id, len(ids), time.perf_counter() - clone_started)
+            return len(ids)
+        except Exception as error:
+            try:
+                _rollback(collection, target_memory_id, old, ids)
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    "Vector reuse failed and rollback also failed. Inspect/restore Chroma before retrying. "
+                    f"Reuse error: {error}; rollback error: {rollback_error}"
+                ) from error
+            raise
+
 
 def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None = None) -> dict[str, Any]:
     """Return a diagnostic report for indexed records belonging to one memory."""

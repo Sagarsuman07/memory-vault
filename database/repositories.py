@@ -621,14 +621,21 @@ def find_duplicate_content(
         raise ValueError("sha256 must not be empty")
     connection = get_connection()
     try:
-        query = """SELECT memory_id FROM ingestion_sources
-                   WHERE user_id = ? AND sha256 = ? AND status = 'loaded'
-                     AND memory_id IS NOT NULL"""
+        # Only reuse a source when its associated memory still exists for the
+        # same user. Older/deleted memories can leave loaded ingestion_sources
+        # rows behind; selecting those orphan rows makes the worker fall back
+        # to full extraction and embedding on every repeated upload.
+        query = """SELECT s.memory_id
+                   FROM ingestion_sources AS s
+                   INNER JOIN memories AS m
+                       ON m.id = s.memory_id AND m.user_id = s.user_id
+                   WHERE s.user_id = ? AND s.sha256 = ? AND s.status = 'loaded'
+                     AND s.memory_id IS NOT NULL"""
         params: list[str] = [user_id, sha256]
         if exclude_source_id:
-            query += " AND source_id != ?"
+            query += " AND s.source_id != ?"
             params.append(exclude_source_id)
-        query += " ORDER BY created_at ASC LIMIT 1"
+        query += " ORDER BY s.created_at ASC LIMIT 1"
         row = connection.execute(query, tuple(params)).fetchone()
         return row["memory_id"] if row else None
     finally:
