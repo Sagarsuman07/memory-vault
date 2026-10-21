@@ -10,9 +10,11 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import json
+import logging
 import threading
 import time
 
+from config.logging_config import StageTimer, get_logger, log_event
 from config.settings import settings
 from database.database import get_connection
 from database.repositories import (
@@ -22,6 +24,8 @@ from database.repositories import (
     update_ingestion_source,
 )
 from memory.memory_models import JobStatus, PipelineStage, PreparationErrorCategory
+
+logger = get_logger(__name__)
 
 _POLL_SECONDS = 0.5
 _START_LOCK = threading.Lock()
@@ -85,7 +89,12 @@ def _advance(job_id: str, user_id: str, stage: PipelineStage, *, completed: int 
 
 
 def process_preparation_job(job_id: str, user_id: str) -> bool:
-    """Run one queued/retrying job; True means extraction and index verification succeeded."""
+    """Run one queued/retrying job; True means extraction and index verification succeeded.
+
+    Before any expensive work, the worker checks for a completed memory with the
+    identical file (same user, same SHA-256). When one is safely reusable its
+    extracted text and vectors are reused; otherwise the normal pipeline runs.
+    """
     max_attempts = max(1, int(getattr(settings, "INGESTION_MAX_ATTEMPTS", 3)))
     retry_delay = max(0.0, float(getattr(settings, "INGESTION_RETRY_DELAY_SECONDS", 5)))
 
@@ -105,35 +114,105 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
             # claimed the same job between the read and the transition.
             return False
 
+        attempt_started = time.perf_counter()
+        attempt_number = job.attempt_count + 1
+        file_label = "unknown"
+        mode = "fresh"
         stage = PipelineStage.DISCOVERY
         try:
             row = _memory_row(job.memory_id, user_id)
             if row is None:
                 raise FileNotFoundError("Memory record is missing.")
             source_path = Path(row["file_path"])
+            file_label = source_path.name
+            log_event(logger, "INGEST_JOB_START", job=job_id, memory=job.memory_id, user=user_id,
+                      file=file_label, attempt=attempt_number)
             if not source_path.is_file():
                 raise FileNotFoundError("Stored source file is missing.")
 
+            # ---- Duplicate check: reuse a completed identical memory when safe. ----
+            reuse = None
+            try:
+                from memory.duplicate_reuse import try_reuse_duplicate
+                reuse = try_reuse_duplicate(
+                    job_id=job_id,
+                    memory_id=job.memory_id,
+                    user_id=user_id,
+                    memory_type=row["memory_type"],
+                    file_label=file_label,
+                )
+            except Exception as reuse_error:
+                reuse = None
+                log_event(logger, "INGEST_DUPLICATE_FALLBACK", logging.WARNING, job=job_id,
+                          memory=job.memory_id, file=file_label,
+                          reason=f"reuse_unavailable_{type(reuse_error).__name__}")
+
+            if reuse is not None:
+                mode = "duplicate_reuse"
+                from rag.vector_store import verify_memory_index
+                # Vectors are already cloned; walk the job through the same stage
+                # order the normal pipeline uses so job-state rules stay valid.
+                stage = PipelineStage.EXTRACTION
+                _advance(job_id, user_id, PipelineStage.EXTRACTION)
+                _save_extracted_text(job.memory_id, user_id, reuse.extracted_text)
+                update_ingestion_source(
+                    job.memory_id,
+                    user_id,
+                    metadata_json=reuse.metadata_json,
+                    warnings_json=reuse.warnings_json,
+                    duplicate_of_memory_id=reuse.source_memory_id,
+                )
+                for next_stage in (PipelineStage.CHUNKING, PipelineStage.EMBEDDING, PipelineStage.INDEXING):
+                    _advance(job_id, user_id, next_stage)
+                    stage = next_stage
+                with StageTimer(logger, "final_index_verification", file=file_label) as timer:
+                    verification = verify_memory_index(job.memory_id, expected_chunks=reuse.chunks)
+                    timer.set(records=verification.get("record_count"), valid=bool(verification.get("valid")))
+                if not verification.get("valid"):
+                    raise RuntimeError("The vector index did not pass post-write verification.")
+                if verification.get("record_count") != len(reuse.chunks):
+                    raise RuntimeError("The verified vector count does not match the chunk count.")
+                _advance(job_id, user_id, PipelineStage.INDEXING, completed=1)
+                transition_preparation_job(job_id, user_id, JobStatus.SUCCEEDED)
+                update_ingestion_source(
+                    job.memory_id,
+                    user_id,
+                    status="loaded",
+                    memory_id=job.memory_id,
+                    stored_file_path=str(source_path),
+                    error_category=None,
+                    error_message=None,
+                )
+                log_event(logger, "INGEST_JOB_SUCCESS", job=job_id, memory=job.memory_id, file=file_label,
+                          mode=mode, reused_from=reuse.source_memory_id, chunks=len(reuse.chunks),
+                          seconds=time.perf_counter() - attempt_started, attempt=attempt_number)
+                return True
+
+            # ---- Normal (fresh) pipeline: unchanged behaviour, now timed. ----
             _advance(job_id, user_id, PipelineStage.EXTRACTION)
             stage = PipelineStage.EXTRACTION
             from ingestion.processing import process_content
-            processed = process_content(source_path)
-            if not processed.text.strip():
-                raise ValueError("No usable text was extracted.")
-            _save_extracted_text(job.memory_id, user_id, processed.text)
-            update_ingestion_source(
-                job.memory_id,
-                user_id,
-                metadata_json=json.dumps(dict(processed.metadata), ensure_ascii=False),
-                warnings_json=json.dumps(list(processed.warnings), ensure_ascii=False),
-            )
+            with StageTimer(logger, "extraction", file=file_label) as timer:
+                processed = process_content(source_path)
+                if not processed.text.strip():
+                    raise ValueError("No usable text was extracted.")
+                _save_extracted_text(job.memory_id, user_id, processed.text)
+                update_ingestion_source(
+                    job.memory_id,
+                    user_id,
+                    metadata_json=json.dumps(dict(processed.metadata), ensure_ascii=False),
+                    warnings_json=json.dumps(list(processed.warnings), ensure_ascii=False),
+                )
+                timer.set(chars=len(processed.text))
 
             _advance(job_id, user_id, PipelineStage.CHUNKING)
             stage = PipelineStage.CHUNKING
             from rag.chunker import split_text
-            chunks = split_text(processed.text, metadata=processed.metadata)
-            if not chunks:
-                raise ValueError("No chunks could be created for indexing.")
+            with StageTimer(logger, "chunking", file=file_label, chars=len(processed.text)) as timer:
+                chunks = split_text(processed.text, metadata=processed.metadata)
+                if not chunks:
+                    raise ValueError("No chunks could be created for indexing.")
+                timer.set(chunks=len(chunks))
 
             _advance(job_id, user_id, PipelineStage.EMBEDDING)
             stage = PipelineStage.EMBEDDING
@@ -149,18 +228,21 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
                         _advance(job_id, user_id, PipelineStage.INDEXING)
                     stage = PipelineStage.INDEXING
 
-            index_memory(
-                memory_id=job.memory_id,
-                user_id=user_id,
-                memory_type=row["memory_type"],
-                chunks=chunks,
-                progress_callback=index_progress,
-            )
+            with StageTimer(logger, "index_memory_total", file=file_label, chunks=len(chunks)):
+                index_memory(
+                    memory_id=job.memory_id,
+                    user_id=user_id,
+                    memory_type=row["memory_type"],
+                    chunks=chunks,
+                    progress_callback=index_progress,
+                )
             current = get_preparation_job(job_id, user_id)
             if current and current.current_stage == PipelineStage.EMBEDDING:
                 _advance(job_id, user_id, PipelineStage.INDEXING)
             stage = PipelineStage.INDEXING
-            verification = verify_memory_index(job.memory_id, expected_chunks=chunks)
+            with StageTimer(logger, "final_index_verification", file=file_label) as timer:
+                verification = verify_memory_index(job.memory_id, expected_chunks=chunks)
+                timer.set(records=verification.get("record_count"), valid=bool(verification.get("valid")))
             if not verification.get("valid"):
                 raise RuntimeError("The vector index did not pass post-write verification.")
             if verification.get("record_count") != len(chunks):
@@ -177,14 +259,27 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
                 error_category=None,
                 error_message=None,
             )
+            log_event(logger, "INGEST_JOB_SUCCESS", job=job_id, memory=job.memory_id, file=file_label,
+                      mode=mode, chunks=len(chunks), seconds=time.perf_counter() - attempt_started,
+                      attempt=attempt_number)
             return True
 
-        except Exception:
+        except Exception as error:
             category, safe_message = _classify_error(stage)
             latest = get_preparation_job(job_id, user_id)
             if latest is None or latest.status != JobStatus.RUNNING:
+                log_event(logger, "INGEST_JOB_ERROR", logging.WARNING, job=job_id, memory=job.memory_id,
+                          file=file_label, stage=stage.value, error=type(error).__name__,
+                          note="job_state_changed_elsewhere", attempt=attempt_number,
+                          seconds=time.perf_counter() - attempt_started)
                 return False
-            if latest.attempt_count < max_attempts:
+            will_retry = latest.attempt_count < max_attempts
+            # Class name only: exception messages could contain file content.
+            log_event(logger, "INGEST_JOB_ERROR", logging.WARNING if will_retry else logging.ERROR,
+                      job=job_id, memory=job.memory_id, file=file_label, mode=mode, stage=stage.value,
+                      category=category.value, error=type(error).__name__, attempt=attempt_number,
+                      will_retry=will_retry, seconds=time.perf_counter() - attempt_started)
+            if will_retry:
                 try:
                     transition_preparation_job(
                         job_id,

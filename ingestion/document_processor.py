@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 from typing import Any
 
 import fitz
@@ -17,9 +18,12 @@ from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from config.logging_config import get_logger, log_event
 from config.settings import settings
 from ingestion.processing import clean_and_normalize_text
 from ingestion.processing_models import ExtractionError, ProcessedContent
+
+logger = get_logger(__name__)
 
 
 def extract_text_from_txt(file_path: str) -> str:
@@ -86,6 +90,7 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
     path = Path(file_path)
     if not path.exists() or not path.is_file():
         raise FileNotFoundError("PDF file does not exist or is not a regular file.")
+    started = time.perf_counter()
     warnings: list[str] = []
     page_records: list[dict[str, Any]] = []
     rendered_text: list[str] = []
@@ -136,6 +141,9 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
         raise ExtractionError("No usable text could be extracted from the PDF, including the configured OCR fallback.")
     if page_records and any(page["character_count"] == 0 for page in page_records):
         warnings.append("One or more PDF pages did not yield text; inspect the source if those pages contain important content.")
+    log_event(logger, "INGEST_TIMING", stage="pdf_text_extraction", file=path.name,
+              seconds=time.perf_counter() - started, pages=len(page_records), ocr_enabled=ocr_enabled,
+              ocr_used=ocr_used, pages_with_text=metadata.get("pages_with_text"))
     return ProcessedContent(text=text, metadata=metadata, warnings=tuple(dict.fromkeys(warnings)),
                             status="partial" if warnings else "succeeded")
 
