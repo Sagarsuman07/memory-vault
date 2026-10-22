@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 import time
 import uuid
 
@@ -82,6 +83,7 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             )
 
         # Persist the source first; no extracted text or model calls happen here.
+        source_persist_started = time.perf_counter()
         create_ingestion_source(
             source_id=memory_id,
             user_id=user_id,
@@ -96,10 +98,17 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             warnings_json=json.dumps(warnings, ensure_ascii=False),
         )
         source_created = True
+        log_event(logger, "INGEST_UPLOAD_SOURCE_PERSISTED", memory=memory_id, user=user_id,
+                  seconds=time.perf_counter() - source_persist_started)
+        file_write_started = time.perf_counter()
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(data)
+        log_event(logger, "INGEST_UPLOAD_FILE_PERSISTED", memory=memory_id, user=user_id,
+                  file=descriptor.file_name, bytes=descriptor.size_bytes,
+                  seconds=time.perf_counter() - file_write_started)
 
         now = datetime.now(timezone.utc).isoformat()
+        memory_persist_started = time.perf_counter()
         create_memory(Memory(
             id=memory_id,
             user_id=user_id,
@@ -113,8 +122,13 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             updated_at=now,
         ))
         memory_created = True
+        log_event(logger, "INGEST_UPLOAD_MEMORY_PERSISTED", memory=memory_id, user=user_id,
+                  seconds=time.perf_counter() - memory_persist_started)
+        job_started = time.perf_counter()
         job = create_preparation_job(memory_id, user_id, total_files=1)
         job_created = True
+        log_event(logger, "INGEST_UPLOAD_JOB_CREATED", job=job.id, memory=memory_id, user=user_id,
+                  seconds=time.perf_counter() - job_started)
         log_event(logger, "INGEST_UPLOAD_QUEUED", job=job.id, memory=memory_id, user=user_id,
                   file=descriptor.file_name, bytes=descriptor.size_bytes,
                   seconds=time.perf_counter() - upload_started)
@@ -129,7 +143,7 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
 
         return {"memory_id": memory_id, "job_id": job.id, "status": job.status.value}
     except Exception as error:
-        log_event(logger, "INGEST_UPLOAD_ERROR", level=40, memory=memory_id, user=user_id,
+        log_event(logger, "INGEST_UPLOAD_ERROR", level=logging.ERROR, memory=memory_id, user=user_id,
                   file=file_name or "unknown", error=type(error).__name__,
                   seconds=time.perf_counter() - upload_started)
         # Remove only records/files created by this failed enqueue attempt. Do not
