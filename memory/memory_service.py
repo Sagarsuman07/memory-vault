@@ -8,8 +8,10 @@ import wave
 
 from langchain_groq import ChatGroq
 
+from config.logging_config import get_logger, log_event
 from config.settings import settings
 
+from database.database import get_connection
 from database.models import Memory
 from memory.memory_models import SourceDocument
 
@@ -47,6 +49,8 @@ from rag.vector_store import (
 
 
 
+
+logger = get_logger(__name__)
 
 UPLOAD_DIR = Path(
     settings.UPLOAD_DIR
@@ -424,6 +428,81 @@ def update_memory(
 
 
 # ============================================================
+# Cleanup of ingestion records left behind by a deleted memory
+# ============================================================
+
+def _cleanup_deleted_memory_records(
+    memory_id: str,
+    user_id: str,
+):
+    """
+    Remove the ingestion bookkeeping rows that belong to ONE deleted memory.
+
+    * ingestion_sources: the upload record (source_id equals the memory id) and
+      any record linked to the memory. Without this, a stale 'loaded' record
+      would keep advertising a duplicate that no longer exists.
+    * preparation_jobs: the job rows of that memory.
+
+    Everything is scoped by user_id. This runs only AFTER the memory itself has
+    been deleted, and it is best-effort: a failure is logged and never turns a
+    successful delete into an error. Audit rows of FAILED uploads (which have
+    no memory) are intentionally not touched.
+    """
+
+    sources_deleted = 0
+    jobs_deleted = 0
+
+    try:
+        connection = get_connection()
+
+        try:
+            cursor = connection.execute(
+                "DELETE FROM ingestion_sources "
+                "WHERE user_id = ? AND (source_id = ? OR memory_id = ?) "
+                "AND status != 'failed'",
+                (user_id, memory_id, memory_id),
+            )
+            sources_deleted = max(0, cursor.rowcount)
+
+            cursor = connection.execute(
+                "DELETE FROM preparation_jobs "
+                "WHERE user_id = ? AND memory_id = ?",
+                (user_id, memory_id),
+            )
+            jobs_deleted = max(0, cursor.rowcount)
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
+
+        log_event(
+            logger,
+            "MEMORY_DELETE_CLEANUP",
+            memory=memory_id,
+            user=user_id,
+            ingestion_sources_removed=sources_deleted,
+            preparation_jobs_removed=jobs_deleted,
+        )
+
+    except Exception as error:
+        # The memory is already gone; never raise from cleanup.
+        log_event(
+            logger,
+            "MEMORY_DELETE_CLEANUP",
+            30,
+            memory=memory_id,
+            user=user_id,
+            status="failed",
+            error=type(error).__name__,
+        )
+
+
+# ============================================================
 # Delete Single Memory
 # ============================================================
 
@@ -494,6 +573,12 @@ def delete_memory(
         raise ValueError(
             "Memory could not be deleted."
         )
+
+    # Remove the ingestion records that belonged to this memory.
+    _cleanup_deleted_memory_records(
+        memory_id,
+        user_id,
+    )
 
 
 # ============================================================
@@ -571,6 +656,104 @@ def delete_memories(
     return len(
         memories
     )
+
+
+# ============================================================
+# One-off cleanup of records left by memories deleted EARLIER
+# ============================================================
+
+def purge_orphaned_ingestion_records(
+    user_id: Optional[str] = None,
+    dry_run: bool = True,
+):
+    """
+    Remove ingestion records whose memory no longer exists.
+
+    Targets only:
+      * ingestion_sources with status 'loaded' whose memory is gone
+        (these are the stale "duplicate" records), and
+      * finished (succeeded/failed) preparation_jobs whose memory is gone.
+
+    Never touches memories, vectors, files, uploads, active jobs, or the audit
+    rows of failed uploads. Scope it with ``user_id`` if desired.
+
+    ``dry_run=True`` (the default) only COUNTS what would be removed. Call with
+    ``dry_run=False`` to delete. Returns a dict of counts.
+
+    Example:
+        from memory.memory_service import purge_orphaned_ingestion_records
+        print(purge_orphaned_ingestion_records())                # preview
+        print(purge_orphaned_ingestion_records(dry_run=False))   # delete
+    """
+
+    user_filter = ""
+    params: tuple = ()
+
+    if user_id is not None:
+        if not user_id.strip():
+            raise ValueError(
+                "User ID cannot be empty."
+            )
+        user_filter = " AND user_id = ?"
+        params = (user_id,)
+
+    sources_where = (
+        "status = 'loaded' AND memory_id IS NOT NULL"
+        " AND memory_id NOT IN (SELECT id FROM memories)"
+        " AND source_id NOT IN (SELECT id FROM memories)"
+        + user_filter
+    )
+    jobs_where = (
+        "status IN ('succeeded', 'failed')"
+        " AND memory_id NOT IN (SELECT id FROM memories)"
+        + user_filter
+    )
+
+    connection = get_connection()
+
+    try:
+        sources = connection.execute(
+            f"SELECT COUNT(*) AS n FROM ingestion_sources WHERE {sources_where}",
+            params,
+        ).fetchone()["n"]
+
+        jobs = connection.execute(
+            f"SELECT COUNT(*) AS n FROM preparation_jobs WHERE {jobs_where}",
+            params,
+        ).fetchone()["n"]
+
+        if not dry_run and (sources or jobs):
+            try:
+                connection.execute(
+                    f"DELETE FROM ingestion_sources WHERE {sources_where}",
+                    params,
+                )
+                connection.execute(
+                    f"DELETE FROM preparation_jobs WHERE {jobs_where}",
+                    params,
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    finally:
+        connection.close()
+
+    log_event(
+        logger,
+        "MEMORY_ORPHAN_PURGE",
+        dry_run=dry_run,
+        user=user_id,
+        ingestion_sources=sources,
+        preparation_jobs=jobs,
+    )
+
+    return {
+        "dry_run": dry_run,
+        "ingestion_sources": sources,
+        "preparation_jobs": jobs,
+    }
 
 
 # ============================================================

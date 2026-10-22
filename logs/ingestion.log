@@ -1,73 +1,51 @@
-2026-10-20 20:19:29 INFO memory.background_worker: INGEST_JOB_START job_id=adbb0b35-f7e5-45a9-b08d-25f0ba29a9e6 memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 attempt=0
-2026-10-20 20:19:30 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 candidate_memory_id=None
-2026-10-20 20:19:30 INFO memory.background_worker: INGEST_DUPLICATE_FALLBACK memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 reason=no_completed_same_user_duplicate_found
-2026-10-20 20:19:30 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=0.001 reused=False
-2026-10-20 20:22:52 INFO memory.background_worker: INGEST_TIMING stage=extraction memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 file=c6c62c6b-f572-4717-b2bf-357f9b96b609.pdf seconds=202.298 chars=611850
-2026-10-20 20:22:52 INFO memory.background_worker: INGEST_TIMING stage=chunking memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=0.217 chars=611850 chunks=895
-2026-10-20 20:22:53 INFO rag.vector_store: INGEST_TIMING stage=chroma_dimension_check seconds=0.008 dimension=384
-2026-10-20 20:23:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=1 batch_chunks=32 total_chunks=895 seconds=15.126
-2026-10-20 20:23:23 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=2 batch_chunks=32 total_chunks=895 seconds=14.780
-2026-10-20 20:23:40 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=3 batch_chunks=32 total_chunks=895 seconds=17.252
-2026-10-20 20:23:53 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=4 batch_chunks=32 total_chunks=895 seconds=12.639
-2026-10-20 20:24:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=5 batch_chunks=32 total_chunks=895 seconds=15.634
-2026-10-20 20:24:22 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=6 batch_chunks=32 total_chunks=895 seconds=13.825
-2026-10-20 20:24:38 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=7 batch_chunks=32 total_chunks=895 seconds=15.486
-2026-10-20 20:24:52 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=8 batch_chunks=32 total_chunks=895 seconds=14.305
-2026-10-20 20:25:04 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=9 batch_chunks=32 total_chunks=895 seconds=12.176
-2026-10-20 20:25:19 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=10 batch_chunks=32 total_chunks=895 seconds=14.244
-2026-10-20 20:25:36 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=11 batch_chunks=32 total_chunks=895 seconds=17.354
-2026-10-20 20:25:52 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=12 batch_chunks=32 total_chunks=895 seconds=15.589
-2026-10-20 20:26:06 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=13 batch_chunks=32 total_chunks=895 seconds=14.290
-2026-10-20 20:26:22 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=14 batch_chunks=32 total_chunks=895 seconds=15.555
-2026-10-20 20:26:38 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=15 batch_chunks=32 total_chunks=895 seconds=16.047
-2026-10-20 20:26:54 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=16 batch_chunks=32 total_chunks=895 seconds=16.088
-2026-10-20 20:27:10 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=17 batch_chunks=32 total_chunks=895 seconds=16.083
-2026-10-20 20:27:25 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=18 batch_chunks=32 total_chunks=895 seconds=14.101
-2026-10-20 20:27:39 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=19 batch_chunks=32 total_chunks=895 seconds=14.172
-2026-10-20 20:27:53 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=20 batch_chunks=32 total_chunks=895 seconds=13.871
-2026-10-20 20:28:08 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=21 batch_chunks=32 total_chunks=895 seconds=15.281
-2026-10-20 20:28:20 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=22 batch_chunks=32 total_chunks=895 seconds=12.249
-2026-10-20 20:28:36 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=23 batch_chunks=32 total_chunks=895 seconds=15.895
-2026-10-20 20:28:50 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=24 batch_chunks=32 total_chunks=895 seconds=13.296
-2026-10-20 20:29:04 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=25 batch_chunks=32 total_chunks=895 seconds=14.506
-2026-10-20 20:29:18 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=26 batch_chunks=32 total_chunks=895 seconds=13.918
-2026-10-20 20:29:33 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=27 batch_chunks=32 total_chunks=895 seconds=14.479
-2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=28 batch_chunks=31 total_chunks=895 seconds=15.249
-2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=embedding_total seconds=413.489 chunks=895 batches=28 dimension=384
-2026-10-20 20:29:48 INFO rag.vector_store: INGEST_TIMING stage=chroma_lock_wait memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 seconds=0.000
-2026-10-20 20:30:03 INFO rag.vector_store: INGEST_TIMING stage=chroma_indexing memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 batches=28 snapshot_seconds=0.003 write_seconds=11.934 verify_seconds=1.926 cleanup_seconds=0.669 lock_held_seconds=14.541
-2026-10-20 20:30:03 INFO memory.background_worker: INGEST_TIMING stage=index_memory_total memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=430.206 chunks=895
-2026-10-20 20:30:04 INFO memory.background_worker: INGEST_TIMING stage=final_index_verification memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 seconds=1.646 records=895 valid=True
-2026-10-20 20:30:05 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=adbb0b35-f7e5-45a9-b08d-25f0ba29a9e6 memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 reused_duplicate=False total_seconds=635.516 chunks=895
-2026-10-20 20:30:36 INFO memory.background_worker: INGEST_JOB_START job_id=65b30190-38d0-41e6-892a-7c0a00ad0f84 memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 attempt=0
-2026-10-20 20:30:36 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 candidate_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609
-2026-10-20 20:30:37 INFO memory.background_worker: INGEST_DUPLICATE_CANDIDATE memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 source_index_valid=True source_chunks=895
-2026-10-20 20:30:55 INFO rag.vector_store: INGEST_TIMING stage=clone_memory_index source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 target_memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 chunks=895 seconds=18.255
-2026-10-20 20:30:56 INFO memory.background_worker: INGEST_TIMING stage=duplicate_vector_clone memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 seconds=18.276
-2026-10-20 20:30:57 INFO memory.background_worker: INGEST_TIMING stage=duplicate_target_verification memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 seconds=1.269 valid=True records=895
-2026-10-20 20:30:57 INFO memory.background_worker: INGEST_DUPLICATE_REUSE memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 source_memory_id=c6c62c6b-f572-4717-b2bf-357f9b96b609 chunks=895 extraction_skipped=true embedding_skipped=true
-2026-10-20 20:30:57 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 seconds=20.419 reused=True
-2026-10-20 20:30:57 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=65b30190-38d0-41e6-892a-7c0a00ad0f84 memory_id=54def220-abc5-4535-a344-f3f5edf15fc9 reused_duplicate=True total_seconds=20.470 chunks=895
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_JOB_START job_id=95dde42a-c9ea-40c8-a177-3640b3466cee memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 attempt=0
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 candidate_memory_id=None
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_DUPLICATE_FALLBACK memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 reason=no_completed_same_user_duplicate_found
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.001 reused=False
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=extraction memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 file=e5e4c0c5-3277-49f5-a861-45b85e88e077.pdf seconds=0.338 chars=23816
-2026-10-20 20:31:39 INFO memory.background_worker: INGEST_TIMING stage=chunking memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.008 chars=23816 chunks=30
-2026-10-20 20:31:39 INFO rag.vector_store: INGEST_TIMING stage=chroma_dimension_check seconds=0.007 dimension=384
-2026-10-20 20:31:54 INFO rag.vector_store: INGEST_TIMING stage=embedding_batch batch=1 batch_chunks=30 total_chunks=30 seconds=15.164
-2026-10-20 20:31:55 INFO rag.vector_store: INGEST_TIMING stage=embedding_total seconds=15.164 chunks=30 batches=1 dimension=384
-2026-10-20 20:31:55 INFO rag.vector_store: INGEST_TIMING stage=chroma_lock_wait memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 seconds=0.000
-2026-10-20 20:31:56 INFO rag.vector_store: INGEST_TIMING stage=chroma_indexing memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 batches=1 snapshot_seconds=0.005 write_seconds=1.086 verify_seconds=0.016 cleanup_seconds=0.020 lock_held_seconds=1.130
-2026-10-20 20:31:56 INFO memory.background_worker: INGEST_TIMING stage=index_memory_total memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=16.566 chunks=30
-2026-10-20 20:31:56 INFO memory.background_worker: INGEST_TIMING stage=final_index_verification memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 seconds=0.723 records=30 valid=True
-2026-10-20 20:31:57 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=95dde42a-c9ea-40c8-a177-3640b3466cee memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 reused_duplicate=False total_seconds=18.446 chunks=30
-2026-10-20 20:32:25 INFO memory.background_worker: INGEST_JOB_START job_id=40fb635d-ad3d-4435-8cb6-481b5bc89fa4 memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 attempt=0
-2026-10-20 20:32:25 INFO memory.background_worker: INGEST_DUPLICATE_CHECK memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 candidate_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077
-2026-10-20 20:32:26 INFO memory.background_worker: INGEST_DUPLICATE_CANDIDATE memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 source_index_valid=True source_chunks=30
-2026-10-20 20:32:27 INFO rag.vector_store: INGEST_TIMING stage=clone_memory_index source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 target_memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 chunks=30 seconds=0.582
-2026-10-20 20:32:27 INFO memory.background_worker: INGEST_TIMING stage=duplicate_vector_clone memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 seconds=0.584
-2026-10-20 20:32:28 INFO memory.background_worker: INGEST_TIMING stage=duplicate_target_verification memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 seconds=1.255 valid=True records=30
-2026-10-20 20:32:28 INFO memory.background_worker: INGEST_DUPLICATE_REUSE memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 source_memory_id=e5e4c0c5-3277-49f5-a861-45b85e88e077 chunks=30 extraction_skipped=true embedding_skipped=true
-2026-10-20 20:32:28 INFO memory.background_worker: INGEST_TIMING stage=duplicate_check memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 seconds=3.313 reused=True
-2026-10-20 20:32:28 INFO memory.background_worker: INGEST_JOB_SUCCESS job_id=40fb635d-ad3d-4435-8cb6-481b5bc89fa4 memory_id=08ab69bb-d840-4f73-8643-0b2198d1cc65 reused_duplicate=True total_seconds=3.663 chunks=30
+2026-10-21 04:59:50 | INFO | memory.background_worker | INGEST_JOB_START job=ce13cfed-d36b-40ab-8d81-d8356a80c817 memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 user=demo_user file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf attempt=1
+2026-10-21 04:59:50 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=ce13cfed-d36b-40ab-8d81-d8356a80c817 memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf sha256=32d204ebf69a result=not_found candidates=0 seconds=0.016
+2026-10-21 04:59:53 | INFO | ingestion.document_processor | INGEST_TIMING stage=pdf_text_extraction file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf seconds=0.133 pages=2 ocr_enabled=True ocr_used=False pages_with_text=2
+2026-10-21 04:59:53 | INFO | memory.background_worker | INGEST_TIMING stage=extraction file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf seconds=3.252 chars=205
+2026-10-21 04:59:53 | INFO | memory.background_worker | INGEST_TIMING stage=chunking file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf seconds=0.001 chars=205 chunks=2
+2026-10-21 05:00:06 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 seconds=1.633 chunks=2 dimension=384
+2026-10-21 05:00:07 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 seconds=0.437 chunks=2
+2026-10-21 05:00:07 | INFO | memory.background_worker | INGEST_TIMING stage=index_memory_total file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf seconds=13.202 chunks=2
+2026-10-21 05:00:07 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf seconds=0.175 records=2 valid=True
+2026-10-21 05:00:07 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=ce13cfed-d36b-40ab-8d81-d8356a80c817 memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 file=8eb799e9-ed9f-45b2-ac58-33a47a0b8580.pdf mode=fresh chunks=2 seconds=16.802 attempt=1
+2026-10-21 05:00:39 | INFO | memory.background_worker | INGEST_JOB_START job=8e528800-7b0c-4858-8621-35a4ea7180a1 memory=7b99b481-5121-42e6-89b5-73db32f45414 user=demo_user file=7b99b481-5121-42e6-89b5-73db32f45414.pdf attempt=1
+2026-10-21 05:00:39 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=8e528800-7b0c-4858-8621-35a4ea7180a1 memory=7b99b481-5121-42e6-89b5-73db32f45414 file=7b99b481-5121-42e6-89b5-73db32f45414.pdf sha256=32d204ebf69a result=found candidates=1 seconds=0.009
+2026-10-21 05:00:40 | INFO | memory.duplicate_reuse | INGEST_TIMING stage=duplicate_vector_clone memory=7b99b481-5121-42e6-89b5-73db32f45414 source_memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 seconds=1.107 chunks=2
+2026-10-21 05:00:40 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_REUSE job=8e528800-7b0c-4858-8621-35a4ea7180a1 memory=7b99b481-5121-42e6-89b5-73db32f45414 file=7b99b481-5121-42e6-89b5-73db32f45414.pdf source_memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 target_memory=7b99b481-5121-42e6-89b5-73db32f45414 chunks=2 skipped_stages=extraction,ocr,embedding seconds=1.176
+2026-10-21 05:00:40 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=7b99b481-5121-42e6-89b5-73db32f45414.pdf seconds=0.290 records=2 valid=True
+2026-10-21 05:00:40 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=8e528800-7b0c-4858-8621-35a4ea7180a1 memory=7b99b481-5121-42e6-89b5-73db32f45414 file=7b99b481-5121-42e6-89b5-73db32f45414.pdf mode=duplicate_reuse reused_from=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 chunks=2 seconds=1.663 attempt=1
+2026-10-21 05:01:39 | INFO | memory.background_worker | INGEST_JOB_START job=d2521f26-a6a1-424f-99b1-e506eb354884 memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 user=demo_user file=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7.pdf attempt=1
+2026-10-21 05:01:39 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=d2521f26-a6a1-424f-99b1-e506eb354884 memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 file=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7.pdf sha256=32d204ebf69a result=found candidates=2 seconds=0.014
+2026-10-21 05:01:39 | INFO | memory.duplicate_reuse | INGEST_TIMING stage=duplicate_vector_clone memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 source_memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 seconds=0.304 chunks=2
+2026-10-21 05:01:39 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_REUSE job=d2521f26-a6a1-424f-99b1-e506eb354884 memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 file=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7.pdf source_memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 target_memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 chunks=2 skipped_stages=extraction,ocr,embedding seconds=0.331
+2026-10-21 05:01:39 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7.pdf seconds=0.308 records=2 valid=True
+2026-10-21 05:01:39 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=d2521f26-a6a1-424f-99b1-e506eb354884 memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 file=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7.pdf mode=duplicate_reuse reused_from=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 chunks=2 seconds=0.945 attempt=1
+2026-10-21 05:02:38 | INFO | memory.memory_service | MEMORY_DELETE_CLEANUP memory=b698b3ca-30c9-4da4-a51d-bc4d03ac6ea7 user=demo_user ingestion_sources_removed=1 preparation_jobs_removed=1
+2026-10-21 05:02:39 | INFO | memory.memory_service | MEMORY_DELETE_CLEANUP memory=7b99b481-5121-42e6-89b5-73db32f45414 user=demo_user ingestion_sources_removed=1 preparation_jobs_removed=1
+2026-10-21 05:02:39 | INFO | memory.memory_service | MEMORY_DELETE_CLEANUP memory=8eb799e9-ed9f-45b2-ac58-33a47a0b8580 user=demo_user ingestion_sources_removed=1 preparation_jobs_removed=1
+2026-10-21 05:03:15 | INFO | memory.background_worker | INGEST_JOB_START job=b3820a2b-92d5-4af3-b069-fbbb0c4487b8 memory=2b2c107d-9919-4d82-b0fa-cf9281d9ff83 user=demo_user file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf attempt=1
+2026-10-21 05:03:15 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=b3820a2b-92d5-4af3-b069-fbbb0c4487b8 memory=2b2c107d-9919-4d82-b0fa-cf9281d9ff83 file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf sha256=32d204ebf69a result=not_found candidates=0 seconds=0.012
+2026-10-21 05:03:15 | INFO | ingestion.document_processor | INGEST_TIMING stage=pdf_text_extraction file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf seconds=0.350 pages=2 ocr_enabled=True ocr_used=False pages_with_text=2
+2026-10-21 05:03:15 | INFO | memory.background_worker | INGEST_TIMING stage=extraction file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf seconds=0.435 chars=205
+2026-10-21 05:03:15 | INFO | memory.background_worker | INGEST_TIMING stage=chunking file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf seconds=0.001 chars=205 chunks=2
+2026-10-21 05:03:18 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=2b2c107d-9919-4d82-b0fa-cf9281d9ff83 seconds=2.632 chunks=2 dimension=384
+2026-10-21 05:03:18 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=2b2c107d-9919-4d82-b0fa-cf9281d9ff83 seconds=0.091 chunks=2
+2026-10-21 05:03:18 | INFO | memory.background_worker | INGEST_TIMING stage=index_memory_total file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf seconds=2.968 chunks=2
+2026-10-21 05:03:20 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf seconds=1.348 records=2 valid=True
+2026-10-21 05:03:20 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=b3820a2b-92d5-4af3-b069-fbbb0c4487b8 memory=2b2c107d-9919-4d82-b0fa-cf9281d9ff83 file=2b2c107d-9919-4d82-b0fa-cf9281d9ff83.pdf mode=fresh chunks=2 seconds=4.906 attempt=1
+2026-10-21 05:04:00 | INFO | memory.background_worker | INGEST_JOB_START job=719c9de6-9356-4580-8882-9e54eb6ee833 memory=054bdc98-3542-4007-bd03-75c18bc0a96c user=demo_user file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf attempt=1
+2026-10-21 05:04:00 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=719c9de6-9356-4580-8882-9e54eb6ee833 memory=054bdc98-3542-4007-bd03-75c18bc0a96c file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf sha256=2d12f3ed4677 result=not_found candidates=0 seconds=0.013
+2026-10-21 05:08:58 | INFO | ingestion.document_processor | INGEST_TIMING stage=pdf_text_extraction file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf seconds=298.407 pages=465 ocr_enabled=True ocr_used=True pages_with_text=465
+2026-10-21 05:08:59 | INFO | memory.background_worker | INGEST_TIMING stage=extraction file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf seconds=299.117 chars=611581
+2026-10-21 05:09:00 | INFO | memory.background_worker | INGEST_TIMING stage=chunking file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf seconds=0.392 chars=611581 chunks=895
+2026-10-21 05:14:22 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=054bdc98-3542-4007-bd03-75c18bc0a96c seconds=321.665 chunks=895 dimension=384
+2026-10-21 05:14:35 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=054bdc98-3542-4007-bd03-75c18bc0a96c seconds=12.951 chunks=895
+2026-10-21 05:14:35 | INFO | memory.background_worker | INGEST_TIMING stage=index_memory_total file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf seconds=335.511 chunks=895
+2026-10-21 05:14:37 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf seconds=1.620 records=895 valid=True
+2026-10-21 05:14:37 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=719c9de6-9356-4580-8882-9e54eb6ee833 memory=054bdc98-3542-4007-bd03-75c18bc0a96c file=054bdc98-3542-4007-bd03-75c18bc0a96c.pdf mode=fresh chunks=895 seconds=637.322 attempt=1
+2026-10-21 05:16:02 | INFO | memory.background_worker | INGEST_JOB_START job=6777bcaf-529b-4cab-94da-28083a2bfe07 memory=639e23a9-6afd-48d3-9337-04c9aee215b7 user=demo_user file=639e23a9-6afd-48d3-9337-04c9aee215b7.pdf attempt=1
+2026-10-21 05:16:02 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_CHECK job=6777bcaf-529b-4cab-94da-28083a2bfe07 memory=639e23a9-6afd-48d3-9337-04c9aee215b7 file=639e23a9-6afd-48d3-9337-04c9aee215b7.pdf sha256=2d12f3ed4677 result=found candidates=1 seconds=0.009
+2026-10-21 05:16:20 | INFO | memory.duplicate_reuse | INGEST_TIMING stage=duplicate_vector_clone memory=639e23a9-6afd-48d3-9337-04c9aee215b7 source_memory=054bdc98-3542-4007-bd03-75c18bc0a96c seconds=16.983 chunks=895
+2026-10-21 05:16:20 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_REUSE job=6777bcaf-529b-4cab-94da-28083a2bfe07 memory=639e23a9-6afd-48d3-9337-04c9aee215b7 file=639e23a9-6afd-48d3-9337-04c9aee215b7.pdf source_memory=054bdc98-3542-4007-bd03-75c18bc0a96c target_memory=639e23a9-6afd-48d3-9337-04c9aee215b7 chunks=895 skipped_stages=extraction,ocr,embedding seconds=18.208
+2026-10-21 05:16:21 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=639e23a9-6afd-48d3-9337-04c9aee215b7.pdf seconds=0.817 records=895 valid=True
+2026-10-21 05:16:21 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=6777bcaf-529b-4cab-94da-28083a2bfe07 memory=639e23a9-6afd-48d3-9337-04c9aee215b7 file=639e23a9-6afd-48d3-9337-04c9aee215b7.pdf mode=duplicate_reuse reused_from=054bdc98-3542-4007-bd03-75c18bc0a96c chunks=895 seconds=19.209 attempt=1
