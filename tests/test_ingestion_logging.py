@@ -38,7 +38,7 @@ class IngestionLoggingTests(unittest.TestCase):
         self.assertEqual(args[0], logging.INFO)
         self.assertIn("INGEST_TIMING", args[2])
         self.assertIn("stage=unit_test", args[3])
-        self.assertIn("status", args[3]) is False
+        self.assertNotIn("status=", args[3])
 
     def test_stage_timer_logs_exception_type_and_propagates(self):
         logger = Mock()
