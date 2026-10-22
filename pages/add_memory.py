@@ -7,9 +7,8 @@ from config.settings import settings
 
 from database.database import initialize_database
 
-from memory.memory_service import (
-    create_new_memory,
-)
+from memory.async_ingestion import enqueue_new_memory
+from database.database import get_connection
 
 
 # ============================================================
@@ -30,6 +29,53 @@ st.set_page_config(
 initialize_database()
 
 USER_ID = settings.DEMO_USER_ID
+
+
+# ============================================================
+# Simplified preparation status
+# ============================================================
+
+_ACTIVE_JOB_STATUSES = ("queued", "running", "retrying")
+
+
+def get_active_preparation_count(user_id: str) -> int:
+    """Return the number of preparation jobs that are queued or in progress."""
+    connection = get_connection()
+    try:
+        placeholders = ", ".join("?" for _ in _ACTIVE_JOB_STATUSES)
+        row = connection.execute(
+            f"SELECT COUNT(*) AS total FROM preparation_jobs "
+            f"WHERE user_id = ? AND status IN ({placeholders})",
+            (user_id, *_ACTIVE_JOB_STATUSES),
+        ).fetchone()
+        return int(row["total"] if row else 0)
+    finally:
+        connection.close()
+
+
+def render_preparation_status(user_id: str) -> None:
+    """Show only the requested two-state knowledge-base status text."""
+    try:
+        count = get_active_preparation_count(user_id)
+    except Exception:
+        st.caption("Memory base status is temporarily unavailable.")
+        return
+
+    if count:
+        st.info(f"Memory base preparing ({count})")
+    else:
+        st.success("Memory base prepared")
+
+
+def _install_status_refresh(function):
+    fragment = getattr(st, "fragment", None)
+    if fragment is None:
+        return function
+    return fragment(run_every="2s")(function)
+
+
+render_preparation_status = _install_status_refresh(render_preparation_status)
+render_preparation_status(USER_ID)
 
 
 # ============================================================
@@ -190,84 +236,35 @@ def process_memory_upload(
     uploaded_file,
     title: str,
 ):
-
-    status = st.status(
-        "Preparing memory...",
-        expanded=True,
-    )
-
-    status.write(
-        "✓ Upload received"
-    )
-
-    def progress_callback(
-        stage: str,
-    ):
-
-        render_upload_progress(
-            status,
-            stage,
-        )
-
+    """Accept the original upload and queue background preparation."""
     try:
-
-        memory = create_new_memory(
+        queued = enqueue_new_memory(
             uploaded_file=uploaded_file,
             title=title,
             user_id=USER_ID,
-            progress_callback=progress_callback,
         )
 
-        status.update(
-            label=(
-                "Memory uploaded successfully."
-            ),
-            state="complete",
-            expanded=False,
-        )
-
+        # Keep the confirmation accurate: enqueueing is not the same as
+        # successful extraction or indexing. Phase 7 will add live progress.
+        st.session_state.memory_queued = {
+            "memory_id": queued["memory_id"],
+            "job_id": queued["job_id"],
+            "status": queued["status"],
+            "title": title.strip(),
+        }
         st.toast(
-            (
-                f"Memory '{memory.title}' "
-                "uploaded successfully."
-            ),
-            icon="✅",
+            f"'{title.strip()}' was added to the preparation queue.",
+            icon="⏳",
         )
-
-        # ----------------------------------------------------
-        # After successful upload
-        # ----------------------------------------------------
-
-        st.session_state.memory_added = True
-
         st.rerun()
 
     except ValueError as error:
+        st.toast(str(error), icon="❌")
 
-        status.update(
-            label="Memory upload failed.",
-            state="error",
-            expanded=False,
-        )
-
+    except Exception:
+        # Do not show raw provider/system exception details in the UI.
         st.toast(
-            str(error),
-            icon="❌",
-        )
-
-    except Exception as error:
-
-        status.update(
-            label="Memory upload failed.",
-            state="error",
-            expanded=False,
-        )
-
-        st.toast(
-            (
-                "Something went wrong: "
-                f"{error}"
-            ),
+            "The upload could not be queued. Please check the application logs and try again.",
             icon="❌",
         )
 
@@ -298,31 +295,6 @@ if st.button(
     st.switch_page(
         "app.py"
     )
-
-
-# ============================================================
-# Success Message
-# ============================================================
-
-if st.session_state.get(
-    "memory_added",
-    False,
-):
-
-    st.success(
-        "Memory added successfully."
-    )
-
-    st.write(
-        "Your memory has been extracted, embedded, "
-        "and indexed."
-    )
-
-    # Clear the success state so the message does not
-    # appear again when the Add Memory page is reopened.
-    st.session_state.memory_added = False
-
-    
 
 
 # ============================================================

@@ -1,9 +1,8 @@
 import ast
 import operator as op
+from functools import lru_cache
 
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 
 from config.settings import settings
@@ -13,10 +12,303 @@ from database.repositories import (
 )
 
 from rag.retriever import retrieve
+
 from rag.grounding import (
     DEFAULT_DISTANCE_THRESHOLD,
     get_grounded_results,
 )
+
+from agent.state import MemoryScope
+
+
+# ============================================================
+# Phase 0.2 — Tool Output Limits
+# ============================================================
+
+MAX_MEMORY_SEARCH_CHUNKS = 5
+
+MAX_CHARS_PER_MEMORY_CHUNK = 1500
+
+MAX_MEMORY_EVIDENCE_CHARS = 7500
+
+MAX_MEMORY_DETAIL_CHARS = 4000
+
+MAX_WEB_RESULT_CHARS = 6000
+
+TRUNCATION_MARKER = "\n...[truncated]"
+
+# Calculator safety limits
+MAX_EXPRESSION_CHARS = 500
+MAX_RESULT_BITS = 100_000
+
+
+# ============================================================
+# Generic Text Limiter
+# ============================================================
+
+def _truncate_text(
+    text: str,
+    max_chars: int,
+) -> str:
+
+    if not text:
+        return ""
+
+    if max_chars <= 0:
+        return ""
+
+    text = str(text).strip()
+
+    if len(text) <= max_chars:
+        return text
+
+    content_limit = max_chars - len(
+        TRUNCATION_MARKER
+    )
+
+    if content_limit <= 0:
+        return TRUNCATION_MARKER[:max_chars]
+
+    return (
+        text[:content_limit].rstrip()
+        + TRUNCATION_MARKER
+    )
+
+
+# ============================================================
+# Memory Evidence Builder
+# ============================================================
+
+def _resolve_memory_title(
+    document,
+    memory_id: str,
+    scope: MemoryScope,
+) -> str:
+    """
+    Resolve the memory title.
+
+    First tries vector metadata.
+    Falls back to the database if the title is unavailable.
+    """
+
+    # SQLite is the source of truth for user-facing memory titles.
+    # Vector metadata may be stale or may contain the placeholder title
+    # "Untitled Memory" even after the SQL record was updated.
+    metadata_title = document.metadata.get("title")
+    title = None
+
+    try:
+        memory = get_memory_record(
+            memory_id=memory_id,
+            user_id=scope["user_id"],
+        )
+        if memory:
+            title = memory.get("title")
+    except Exception:
+        # Retrieval should still work if the title lookup fails; use only
+        # the metadata fallback and never change the retrieval result.
+        title = None
+
+    def usable_title(value):
+        value = str(value or "").strip()
+        return value if value and value.casefold() not in {
+            "untitled memory", "untitled", "none", "null"
+        } else None
+
+    title = usable_title(title) or usable_title(metadata_title)
+    return _truncate_text(title or "Untitled Memory", 120)
+
+
+def _build_memory_evidence(
+    grounded_results,
+    scope: MemoryScope,
+):
+    """
+    Build bounded evidence for the LLM.
+
+    Evidence is chunk-level.
+
+    Sources are memory-level.
+
+    Therefore, if multiple chunks belong to the same memory,
+    the LLM receives the relevant chunks while the UI receives
+    only one source entry for that memory.
+    """
+
+    formatted_results = []
+
+    # Memory-level sources.
+    sources_by_memory = {}
+
+    # Titles already resolved in this call.
+    titles = {}
+
+    total_chars = 0
+
+    strongest_distance = None
+
+    evidence_rank = 0
+
+    for document, distance in grounded_results:
+
+        # ----------------------------------------------------
+        # Chunk limit
+        # ----------------------------------------------------
+
+        if (
+            evidence_rank
+            >= MAX_MEMORY_SEARCH_CHUNKS
+        ):
+            break
+
+        memory_id = document.metadata.get(
+            "memory_id"
+        )
+
+        if not memory_id:
+            continue
+
+        # ----------------------------------------------------
+        # Authorization check
+        # ----------------------------------------------------
+
+        if not _is_memory_allowed(
+            scope,
+            memory_id,
+        ):
+            continue
+
+        memory_type = document.metadata.get(
+            "memory_type",
+            "unknown",
+        )
+
+        # ----------------------------------------------------
+        # Character budget
+        # ----------------------------------------------------
+
+        remaining_chars = (
+            MAX_MEMORY_EVIDENCE_CHARS
+            - total_chars
+        )
+
+        if remaining_chars <= 0:
+            break
+
+        chunk_limit = min(
+            MAX_CHARS_PER_MEMORY_CHUNK,
+            remaining_chars,
+        )
+
+        content = _truncate_text(
+            document.page_content,
+            chunk_limit,
+        )
+
+        if not content:
+            continue
+
+        evidence_rank += 1
+
+        # The final LLM needs to see the memory ID
+        # so it can report USED_MEMORY_IDS.
+        if memory_id not in titles:
+
+            titles[memory_id] = _resolve_memory_title(
+                document,
+                memory_id,
+                scope,
+            )
+
+        title = titles[memory_id]
+
+        evidence = (
+            f"Evidence {evidence_rank}\n"
+            f"Memory ID: {memory_id}\n"
+            f"Title: {title}\n\n"
+            f"Content:\n"
+            f"{content}"
+        )
+
+        evidence_remaining = (
+            MAX_MEMORY_EVIDENCE_CHARS
+            - total_chars
+        )
+
+        if len(evidence) > evidence_remaining:
+
+            evidence = _truncate_text(
+                evidence,
+                evidence_remaining,
+            )
+
+        if not evidence:
+            break
+
+        formatted_results.append(
+            evidence
+        )
+
+        total_chars += len(
+            evidence
+        )
+
+        # ----------------------------------------------------
+        # Memory-level source
+        # ----------------------------------------------------
+
+        if memory_id not in sources_by_memory:
+
+            sources_by_memory[
+                memory_id
+            ] = {
+                "memory_id": memory_id,
+                "memory_type": memory_type,
+                "title": (
+                    title
+                    or "Untitled Memory"
+                ),
+                "distance": float(
+                    distance
+                ),
+            }
+
+        else:
+
+            # Keep strongest distance
+            # for this memory.
+            current_distance = (
+                sources_by_memory[
+                    memory_id
+                ]["distance"]
+            )
+
+            if distance < current_distance:
+
+                sources_by_memory[
+                    memory_id
+                ]["distance"] = float(
+                    distance
+                )
+
+        # ----------------------------------------------------
+        # Overall strongest retrieval
+        # ----------------------------------------------------
+
+        if (
+            strongest_distance is None
+            or distance < strongest_distance
+        ):
+
+            strongest_distance = distance
+
+    return (
+        formatted_results,
+        list(
+            sources_by_memory.values()
+        ),
+        strongest_distance,
+    )
 
 
 # ============================================================
@@ -36,21 +328,16 @@ _ALLOWED_OPERATORS = {
 }
 
 
-def _safe_calculate(
-    node
-):
-    """
-    Recursively evaluate a restricted arithmetic AST.
-    """
+def _safe_calculate(node):
 
     if isinstance(
         node,
         ast.Constant,
     ):
 
-        if isinstance(
-            node.value,
-            (int, float),
+        if (
+            isinstance(node.value, (int, float))
+            and not isinstance(node.value, bool)
         ):
 
             return node.value
@@ -58,7 +345,6 @@ def _safe_calculate(
         raise ValueError(
             "Only numbers are allowed."
         )
-
 
     if isinstance(
         node,
@@ -80,7 +366,6 @@ def _safe_calculate(
                 node.operand
             )
         )
-
 
     if isinstance(
         node,
@@ -105,26 +390,49 @@ def _safe_calculate(
             node.right
         )
 
+        if isinstance(node.op, ast.Pow):
 
-        # ----------------------------------------
-        # Prevent dangerous exponentiation
-        # ----------------------------------------
+            if abs(right) > 10:
 
-        if (
-            isinstance(node.op, ast.Pow)
-            and abs(right) > 10
-        ):
+                raise ValueError(
+                    "Exponent is too large."
+                )
 
-            raise ValueError(
-                "Exponent is too large."
-            )
+            # Chained powers such as ((9**10)**10)**10 ... grow
+            # exponentially and could hang the server. Check the size
+            # BEFORE computing.
+            if (
+                isinstance(left, int)
+                and isinstance(right, int)
+                and right > 0
+                and abs(left).bit_length() * right > MAX_RESULT_BITS
+            ):
 
+                raise ValueError(
+                    "Result is too large."
+                )
 
-        return operator(
+        result = operator(
             left,
             right,
         )
 
+        if isinstance(result, complex):
+
+            raise ValueError(
+                "Result is not a real number."
+            )
+
+        if (
+            isinstance(result, int)
+            and result.bit_length() > MAX_RESULT_BITS
+        ):
+
+            raise ValueError(
+                "Result is too large."
+            )
+
+        return result
 
     raise ValueError(
         "Only arithmetic expressions are supported."
@@ -132,15 +440,23 @@ def _safe_calculate(
 
 
 def calculate_expression(
-    expression: str
+    expression: str,
 ):
 
-    if not expression or not expression.strip():
+    if (
+        not expression
+        or not expression.strip()
+    ):
 
         raise ValueError(
             "Expression cannot be empty."
         )
 
+    if len(expression) > MAX_EXPRESSION_CHARS:
+
+        raise ValueError(
+            "Expression is too long."
+        )
 
     try:
 
@@ -149,14 +465,9 @@ def calculate_expression(
             mode="eval",
         )
 
-
-        result = _safe_calculate(
+        return _safe_calculate(
             tree.body
         )
-
-
-        return result
-
 
     except ZeroDivisionError:
 
@@ -164,11 +475,12 @@ def calculate_expression(
             "Cannot divide by zero."
         )
 
-
     except (
         SyntaxError,
         ValueError,
         TypeError,
+        OverflowError,
+        RecursionError,
     ) as error:
 
         raise ValueError(
@@ -177,48 +489,168 @@ def calculate_expression(
 
 
 # ============================================================
+# Scope Validation
+# ============================================================
+
+def _validate_scope(
+    scope: MemoryScope,
+):
+
+    if not isinstance(
+        scope,
+        dict,
+    ):
+
+        raise ValueError(
+            "Invalid memory scope."
+        )
+
+    user_id = scope.get(
+        "user_id"
+    )
+
+    if (
+        not isinstance(
+            user_id,
+            str,
+        )
+        or not user_id.strip()
+    ):
+
+        raise ValueError(
+            "Memory scope user ID cannot be empty."
+        )
+
+    scope_type = scope.get(
+        "scope_type"
+    )
+
+    if scope_type not in {
+        "all",
+        "memory",
+    }:
+
+        raise ValueError(
+            "Invalid memory scope type."
+        )
+
+    memory_ids = scope.get(
+        "memory_ids"
+    )
+
+    if scope_type == "all":
+
+        if memory_ids is not None:
+
+            raise ValueError(
+                "Global scope cannot contain memory IDs."
+            )
+
+    else:
+
+        if (
+            not isinstance(
+                memory_ids,
+                list,
+            )
+            or not memory_ids
+        ):
+
+            raise ValueError(
+                "Memory scope must contain at least one memory ID."
+            )
+
+        for memory_id in memory_ids:
+
+            if (
+                not isinstance(
+                    memory_id,
+                    str,
+                )
+                or not memory_id.strip()
+            ):
+
+                raise ValueError(
+                    "Memory scope contains an invalid memory ID."
+                )
+
+
+def _is_memory_allowed(
+    scope: MemoryScope,
+    memory_id: str,
+) -> bool:
+    if not memory_id:
+        return False
+
+    if scope["scope_type"] == "memory":
+        return memory_id in (scope["memory_ids"] or [])
+
+    # Global retrieval is already filtered by user_id in the retriever,
+    # but validate ownership again before exposing evidence/source IDs.
+    try:
+        return get_memory_record(
+            memory_id=memory_id,
+            user_id=scope["user_id"],
+        ) is not None
+    except Exception:
+        return False
+
+
+# ============================================================
+# Shared Web Search Client
+# ============================================================
+
+_tavily_client = None
+
+
+def _get_tavily():
+    global _tavily_client
+
+    if _tavily_client is None:
+
+        _tavily_client = TavilySearch(
+            max_results=5,
+            topic="general",
+        )
+
+    return _tavily_client
+
+
+# ============================================================
 # Create Tools
 # ============================================================
 
-def create_tools(
-    user_id: str,
-    memory_id: str | None = None,
+def _build_tools(
+    scope: MemoryScope,
 ):
 
-    if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
+    _validate_scope(
+        scope
+    )
 
-    if memory_id is not None and not memory_id.strip():
-        raise ValueError(
-            "Memory ID cannot be empty."
-        )
-
-    # memory_id is application-controlled.
-    # The LLM never chooses the retrieval scope.
-
+    user_id = scope[
+        "user_id"
+    ]
 
     # ========================================================
     # Tool 1 — Search Memories
     # ========================================================
 
-    @tool(response_format="content_and_artifact")
+    @tool(
+        response_format="content_and_artifact"
+    )
     def search_memories(
         query: str,
     ):
         """
-        Search the user's saved memories using semantic search.
-
-        The search is automatically restricted to the current
-        chat scope. The model cannot choose user_id or memory_id.
-
-        The tool returns:
-            content -> evidence visible to the LLM
-            artifact -> grounding/source metadata used by the app
+        Search the user's saved memories.
         """
 
-        if not query or not query.strip():
+        if (
+            not query
+            or not query.strip()
+        ):
+
             return (
                 "No search query was provided.",
                 {
@@ -229,14 +661,35 @@ def create_tools(
                 },
             )
 
+        # ----------------------------------------------------
+        # Selected memory
+        # ----------------------------------------------------
+
+        selected_memory_id = None
+
+        if (
+            scope["scope_type"]
+            == "memory"
+        ):
+
+            selected_memory_id = (
+                scope["memory_ids"]
+                or [None]
+            )[0]
+
+        # ----------------------------------------------------
+        # Retrieval
+        # ----------------------------------------------------
+
         results = retrieve(
-            question=query,
+            question=query.strip(),
             user_id=user_id,
-            top_k=5,
-            memory_id=memory_id,
+            top_k=MAX_MEMORY_SEARCH_CHUNKS,
+            memory_id=selected_memory_id,
         )
 
         if not results:
+
             return (
                 "No grounded memory evidence was found for this query. "
                 "Answer exactly: This information wasn't found in your memory.",
@@ -248,14 +701,18 @@ def create_tools(
                 },
             )
 
-        # --------------------------------------------------------
-        # Grounding gate
-        # --------------------------------------------------------
-        grounded_results = get_grounded_results(
-            results
+        # ----------------------------------------------------
+        # Grounding
+        # ----------------------------------------------------
+
+        grounded_results = (
+            get_grounded_results(
+                results
+            )
         )
 
         if not grounded_results:
+
             return (
                 "No grounded memory evidence was found for this query. "
                 "Answer exactly: This information wasn't found in your memory.",
@@ -264,167 +721,88 @@ def create_tools(
                     "confidence": "Not found",
                     "distance": None,
                     "sources": [],
-                    "threshold": DEFAULT_DISTANCE_THRESHOLD,
+                    "threshold":
+                        DEFAULT_DISTANCE_THRESHOLD,
                 },
             )
 
-        strongest_distance = min(
-            distance
-            for _, distance in grounded_results
+        # ----------------------------------------------------
+        # Build evidence + sources
+        # ----------------------------------------------------
+
+        (
+            formatted_results,
+            sources,
+            strongest_distance,
+        ) = _build_memory_evidence(
+            grounded_results,
+            scope,
         )
 
-        if strongest_distance <= 0.4:
-            confidence = "High retrieval confidence"
-        else:
-            confidence = "Medium retrieval confidence"
+        if not formatted_results:
 
-        # --------------------------------------------------------
-        # Only evidence is exposed to the LLM.
-        #
-        # Grounding status, confidence, distance and source
-        # metadata are stored separately in the artifact.
-        # --------------------------------------------------------
-        formatted_results = []
-        sources = []
-
-        for rank, (
-            document,
-            distance,
-        ) in enumerate(
-            grounded_results,
-            start=1,
-        ):
-            memory_id_value = document.metadata[
-                "memory_id"
-            ]
-
-            memory_type = document.metadata[
-                "memory_type"
-            ]
-
-            chunk_index = document.metadata[
-                "chunk_index"
-            ]
-
-            formatted_results.append(
-                f"""
-Evidence {rank}
-
-Content:
-{document.page_content}
-""".strip()
+            return (
+                "No authorized memory evidence was found for this query. "
+                "Answer exactly: This information wasn't found in your memory.",
+                {
+                    "grounded": False,
+                    "confidence": "Not found",
+                    "distance": None,
+                    "sources": [],
+                },
             )
 
-            sources.append(
-                {
-                    "memory_id": memory_id_value,
-                    "memory_type": memory_type,
-                    "chunk_index": int(chunk_index),
-                    "distance": float(distance),
-                }
+        # ----------------------------------------------------
+        # Confidence
+        # ----------------------------------------------------
+
+        if strongest_distance <= 0.4:
+
+            confidence = (
+                "High retrieval confidence"
+            )
+
+        else:
+
+            confidence = (
+                "Medium retrieval confidence"
             )
 
         artifact = {
             "grounded": True,
             "confidence": confidence,
-            "distance": float(strongest_distance),
-            "threshold": DEFAULT_DISTANCE_THRESHOLD,
+            "distance": float(
+                strongest_distance
+            ),
+            "threshold":
+                DEFAULT_DISTANCE_THRESHOLD,
             "sources": sources,
+            "limits": {
+                "max_chunks":
+                    MAX_MEMORY_SEARCH_CHUNKS,
+                "max_chars_per_chunk":
+                    MAX_CHARS_PER_MEMORY_CHUNK,
+                "max_total_chars":
+                    MAX_MEMORY_EVIDENCE_CHARS,
+            },
         }
 
         return (
-            "\n\n".join(formatted_results),
+            "\n\n".join(
+                formatted_results
+            ),
             artifact,
         )
 
-
     # ========================================================
-    # Tool 2 — Get Memory
-    # ========================================================
-
-    @tool
-    def get_memory(
-        memory_id_requested: str,
-    ) -> str:
-        """
-        Get detailed information about one saved memory.
-
-        In a memory-scoped chat, this operation is restricted
-        to the selected memory.
-        """
-
-        if (
-            not memory_id_requested
-            or not memory_id_requested.strip()
-        ):
-
-            return (
-                "Memory ID cannot be empty."
-            )
-
-
-        # ----------------------------------------------------
-        # Scope security
-        # ----------------------------------------------------
-
-        if (
-            memory_id is not None
-            and memory_id_requested != memory_id
-        ):
-
-            return (
-                "Memory not found."
-            )
-
-
-        memory = get_memory_record(
-            memory_id=memory_id_requested,
-            user_id=user_id,
-        )
-
-
-        if memory is None:
-
-            return (
-                "Memory not found."
-            )
-
-
-        return f"""
-Memory ID:
-{memory["id"]}
-
-Title:
-{memory["title"]}
-
-Memory Type:
-{memory["memory_type"]}
-
-File Name:
-{memory["file_name"]}
-
-Summary:
-{memory["summary"] or "No summary available."}
-
-Extracted Content:
-{memory["extracted_text"]}
-""".strip()
-
-
-    # ========================================================
-    # Tool 3 — Calculator
+    # Tool 2 — Calculator
     # ========================================================
 
     @tool
     def calculate(
         expression: str,
     ) -> str:
-        """
-        Calculate a mathematical expression.
-
-        Use this tool when arithmetic is required.
-        Do not perform complex arithmetic manually.
-        """
+        """Calculate a mathematical expression."""
 
         try:
 
@@ -432,11 +810,9 @@ Extracted Content:
                 expression
             )
 
-
             return (
                 f"Result: {result}"
             )
-
 
         except ValueError as error:
 
@@ -444,21 +820,9 @@ Extracted Content:
                 f"Calculation error: {error}"
             )
 
-
     # ========================================================
-    # Tool 4 — Web Search
+    # Tool 3 — Web Search
     # ========================================================
-
-    tavily_tool = None
-
-
-    if settings.TAVILY_API_KEY:
-
-        tavily_tool = TavilySearch(
-            max_results=5,
-            topic="general",
-        )
-
 
     @tool
     def search_web(
@@ -466,52 +830,85 @@ Extracted Content:
     ) -> str:
         """
         Search the internet for current or external information.
-
-        Use this tool only when the requested information
-        is not expected to come from the user's memories,
-        or when the user explicitly asks for current
-        or web information.
         """
 
         if not settings.TAVILY_API_KEY:
-
-            return (
-                "Web search is not configured. "
-                "TAVILY_API_KEY is missing."
+            # Raise instead of returning an error-looking string. A normal
+            # string is recorded by LangChain as a successful tool run.
+            raise RuntimeError(
+                "Web search is unavailable because TAVILY_API_KEY is not configured."
             )
-
 
         if not query or not query.strip():
-
-            return (
-                "Web search query cannot be empty."
-            )
-
+            raise ValueError("Web search query cannot be empty.")
 
         try:
-
-            results = tavily_tool.invoke(
-                {
-                    "query": query
-                }
-            )
-
-
-            return str(
-                results
-            )
-
-
+            results = _get_tavily().invoke({"query": query.strip()})
         except Exception as error:
+            # Keep trace status accurate while avoiding a potentially huge
+            # provider traceback in the user-visible tool result.
+            raise RuntimeError(
+                "Web search failed because the external search service could not be reached."
+            ) from error
 
-            return (
-                f"Web search failed: {error}"
-            )
+        if not results:
+            return "Web search completed but returned no results for this query."
 
+        return _truncate_text(str(results), MAX_WEB_RESULT_CHARS)
+
+    # ========================================================
+    # Return ONLY tools that the agent should be allowed to use
+    # ========================================================
 
     return [
         search_memories,
-        get_memory,
         calculate,
         search_web,
     ]
+
+
+# ============================================================
+# Cached public entry point
+# ============================================================
+# The tools are stateless closures over an immutable scope, so one
+# set per (user, scope) is enough. agent_node used to rebuild them on
+# every loop iteration.
+
+@lru_cache(maxsize=256)
+def _cached_tools(
+    user_id: str,
+    scope_type: str,
+    memory_ids: tuple,
+):
+
+    return tuple(
+        _build_tools(
+            {
+                "user_id": user_id,
+                "scope_type": scope_type,
+                "memory_ids": (
+                    list(memory_ids)
+                    if scope_type == "memory"
+                    else None
+                ),
+            }
+        )
+    )
+
+
+def create_tools(
+    scope: MemoryScope,
+):
+
+    # Validate every time; only the construction is cached.
+    _validate_scope(
+        scope
+    )
+
+    return list(
+        _cached_tools(
+            scope["user_id"],
+            scope["scope_type"],
+            tuple(scope["memory_ids"] or ()),
+        )
+    )

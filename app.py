@@ -6,6 +6,7 @@ from agent.graph import (
 
 from config.settings import settings
 from database.database import initialize_database
+from memory.background_worker import start_background_worker
 
 from memory.memory_service import (
     list_memories,
@@ -25,6 +26,7 @@ st.set_page_config(
 )
 
 initialize_database()
+start_background_worker()
 
 USER_ID = settings.DEMO_USER_ID
 

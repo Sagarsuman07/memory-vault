@@ -1,73 +1,22 @@
+"""Compatibility entry point for discovery and processed-content extraction."""
 from pathlib import Path
 
-from ingestion.document_processor import (
-    extract_document_text,
+from ingestion.discovery import (
+    AUDIO_EXTENSIONS, DOCUMENT_EXTENSIONS, IMAGE_EXTENSIONS, SUPPORTED_EXTENSIONS,
+    SourceChange, SourceDescriptor, SourceValidationError, detect_source_change,
+    discover_file, discover_upload, get_memory_type, get_media_type,
 )
-
-from ingestion.image_processor import (
-    extract_text_from_image,
-)
-
-from ingestion.audio_processor import (
-    extract_text_from_audio,
-)
-
-
-DOCUMENT_EXTENSIONS = {
-    ".pdf",
-    ".docx",
-    ".txt",
-}
-
-IMAGE_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".gif",
-}
-
-AUDIO_EXTENSIONS = {
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".mpeg",
-    ".mpga",
-    ".webm",
-    ".ogg",
-    ".flac",
-}
-
-
-def get_memory_type(file_path: str) -> str:
-    extension = Path(file_path).suffix.lower()
-
-    if extension in DOCUMENT_EXTENSIONS:
-        return "document"
-
-    if extension in IMAGE_EXTENSIONS:
-        return "image"
-
-    if extension in AUDIO_EXTENSIONS:
-        return "audio"
-
-    raise ValueError(
-        f"Unsupported file type: {extension}"
-    )
+from ingestion.processing import process_content
 
 
 def extract_content(file_path: str) -> str:
-    extension = Path(file_path).suffix.lower()
+    """Backward-compatible API: return cleaned extracted text as a string."""
+    return process_content(file_path).text
 
-    if extension in DOCUMENT_EXTENSIONS:
-        return extract_document_text(file_path)
 
-    if extension in IMAGE_EXTENSIONS:
-        return extract_text_from_image(file_path)
-
-    if extension in AUDIO_EXTENSIONS:
-        return extract_text_from_audio(file_path)
-
-    raise ValueError(
-        f"Unsupported file type: {extension}"
-    )
+__all__ = [
+    "AUDIO_EXTENSIONS", "DOCUMENT_EXTENSIONS", "IMAGE_EXTENSIONS", "SUPPORTED_EXTENSIONS",
+    "SourceChange", "SourceDescriptor", "SourceValidationError", "detect_source_change",
+    "discover_file", "discover_upload", "extract_content", "get_memory_type", "get_media_type",
+    "process_content",
+]

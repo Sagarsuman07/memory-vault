@@ -5,7 +5,7 @@ import mimetypes
 import streamlit as st
 
 from config.settings import settings
-from database.database import initialize_database
+from database.database import get_connection, initialize_database
 
 from memory.memory_service import (
     get_memory_by_id,
@@ -295,21 +295,54 @@ with summary_col:
                     type="primary",
                     key=f"generate_summary_{memory['id']}",
                 ):
+                    # Do not generate a summary until background ingestion and
+                    # indexing have completed successfully for this memory.
+                    connection = get_connection()
                     try:
-                        with st.spinner("Generating title and summary..."):
-                            generate_memory_summary(
-                                memory_id=memory["id"],
-                                user_id=USER_ID,
+                        preparation_job = connection.execute(
+                            """
+                            SELECT status, current_stage
+                            FROM preparation_jobs
+                            WHERE memory_id = ? AND user_id = ?
+                            ORDER BY created_at DESC, id DESC
+                            LIMIT 1
+                            """,
+                            (memory["id"], USER_ID),
+                        ).fetchone()
+                    finally:
+                        connection.close()
+
+                    if preparation_job is not None and (
+                        preparation_job["status"] != "succeeded"
+                        or preparation_job["current_stage"] != "complete"
+                    ):
+                        if preparation_job["status"] == "failed":
+                            st.warning(
+                                "Knowledge base preparation failed for this memory. "
+                                "Please resolve the ingestion issue and try again "
+                                "after preparation has completed."
                             )
+                        else:
+                            st.info(
+                                "Memory ingestion and indexing are still in progress. "
+                                "Please try again once knowledge base preparation is completed."
+                            )
+                    else:
+                        try:
+                            with st.spinner("Generating title and summary..."):
+                                generate_memory_summary(
+                                    memory_id=memory["id"],
+                                    user_id=USER_ID,
+                                )
 
-                        st.toast(
-                            "AI title and summary generated successfully.",
-                            icon="✅",
-                        )
-                        st.rerun()
+                            st.toast(
+                                "AI title and summary generated successfully.",
+                                icon="✅",
+                            )
+                            st.rerun()
 
-                    except Exception as error:
-                        st.toast(str(error), icon="❌")
+                        except Exception as error:
+                            st.toast(str(error), icon="❌")
 
 
 # ============================================================
