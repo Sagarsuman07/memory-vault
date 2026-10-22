@@ -101,17 +101,25 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
     while True:
         job = get_preparation_job(job_id, user_id)
         if job is None:
+            log_event(logger, "INGEST_JOB_EXIT", logging.WARNING, job=job_id, user=user_id,
+                      reason="job_not_found")
             return False
         if job.status in {JobStatus.SUCCEEDED, JobStatus.FAILED}:
+            log_event(logger, "INGEST_JOB_EXIT", job=job_id, memory=job.memory_id, user=user_id,
+                      status=job.status.value, reason="job_already_terminal")
             return job.status == JobStatus.SUCCEEDED
         if job.status not in {JobStatus.QUEUED, JobStatus.RETRYING}:
             # A different worker already claimed the job.
+            log_event(logger, "INGEST_JOB_EXIT", job=job_id, memory=job.memory_id, user=user_id,
+                      status=job.status.value, reason="job_claimed_elsewhere")
             return False
         try:
             transition_preparation_job(job_id, user_id, JobStatus.RUNNING)
-        except Exception:
+        except Exception as error:
             # Atomic transition prevents duplicate execution if another process
             # claimed the same job between the read and the transition.
+            log_event(logger, "INGEST_JOB_EXIT", logging.WARNING, job=job_id, memory=job.memory_id,
+                      user=user_id, reason="job_claim_failed", error=type(error).__name__)
             return False
 
         attempt_started = time.perf_counter()
@@ -381,8 +389,10 @@ def run_worker_forever() -> None:
     concurrency = _worker_count()
     try:
         _recover_interrupted_jobs_on_startup()
-    except Exception:
+    except Exception as error:
         # Startup recovery must not prevent fresh queued jobs from being served.
+        log_event(logger, "INGEST_WORKER_RECOVERY_ERROR", logging.WARNING,
+                  error=type(error).__name__)
         pass
     in_flight: dict[Future, tuple[str, str]] = {}
     in_flight_keys: set[tuple[str, str]] = set()
@@ -394,8 +404,10 @@ def run_worker_forever() -> None:
                 if future.done():
                     try:
                         future.result()
-                    except Exception:
+                    except Exception as error:
                         # Never log source contents or raw provider exceptions here.
+                        log_event(logger, "INGEST_WORKER_TASK_ERROR", logging.ERROR,
+                                  job=key[0], user=key[1], error=type(error).__name__)
                         pass
                     in_flight.pop(future, None)
                     in_flight_keys.discard(key)
@@ -412,8 +424,10 @@ def run_worker_forever() -> None:
                         in_flight[future] = key
                         in_flight_keys.add(key)
                         free_slots -= 1
-                except Exception:
+                except Exception as error:
                     # Transient DB issues should not kill the dispatcher.
+                    log_event(logger, "INGEST_WORKER_DISPATCH_ERROR", logging.WARNING,
+                              error=type(error).__name__)
                     pass
 
             _STOP_EVENT.wait(_POLL_SECONDS)
