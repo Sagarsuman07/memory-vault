@@ -56,10 +56,20 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
     dimension = existing_dimension
     for start in range(0, len(texts), batch_size):
         batch = list(texts[start:start + batch_size])
+        batch_started = time.perf_counter()
+        batch_number = start // batch_size + 1
         # Release the shared embedding slot after each batch, so a small memory
         # can make progress between batches of a large memory.
-        with _EMBEDDING_LOCK:
-            raw = embedder.embed_documents(batch)
+        try:
+            with _EMBEDDING_LOCK:
+                raw = embedder.embed_documents(batch)
+        except Exception as error:
+            log_event(logger, "INGEST_EMBEDDING_BATCH_ERROR", logging.WARNING,
+                      batch=batch_number, start=start, items=len(batch),
+                      error=type(error).__name__, seconds=time.perf_counter() - batch_started)
+            raise
+        log_event(logger, "INGEST_EMBEDDING_BATCH_SUCCESS", batch=batch_number,
+                  start=start, items=len(batch), seconds=time.perf_counter() - batch_started)
         vectors = _as_list(raw)
         if len(vectors) != len(batch):
             raise ValueError("Embedding response count does not match input batch.")
@@ -215,8 +225,12 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
         try:
             for start in range(0, len(ids), batch_size):
                 end = start + batch_size
+                batch_started = time.perf_counter()
                 collection.upsert(ids=ids[start:end], embeddings=vectors[start:end],
                                   documents=texts[start:end], metadatas=metadatas[start:end])
+                log_event(logger, "INGEST_CHROMA_BATCH_SUCCESS", memory=memory_id,
+                          batch=start // batch_size + 1, start=start,
+                          items=len(ids[start:end]), seconds=time.perf_counter() - batch_started)
             _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
             expected_ids = set(ids)
             stale = [x for x in old["ids"] if x not in expected_ids]
@@ -230,13 +244,20 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
                       seconds=time.perf_counter() - chroma_started, chunks=len(ids))
             return len(ids)
         except Exception as error:
+            log_event(logger, "INGEST_CHROMA_INDEX_ERROR", logging.ERROR, memory=memory_id,
+                      error=type(error).__name__, chunks=len(ids),
+                      seconds=time.perf_counter() - chroma_started)
             try:
                 _rollback(collection, memory_id, old, ids)
             except Exception as rollback_error:
+                log_event(logger, "INGEST_CHROMA_ROLLBACK_ERROR", logging.CRITICAL,
+                          memory=memory_id, error=type(rollback_error).__name__)
                 raise RuntimeError(
                     "Indexing failed and rollback also failed. Inspect/restore Chroma before retrying. "
                     f"Indexing error: {error}; rollback error: {rollback_error}"
                 ) from error
+            log_event(logger, "INGEST_CHROMA_ROLLBACK_SUCCESS", logging.WARNING,
+                      memory=memory_id, restored_records=len(old["ids"]))
             raise
 
 def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None = None) -> dict[str, Any]:
