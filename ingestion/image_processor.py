@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
+import time
 from typing import Any
 
+from config.logging_config import get_logger, log_event
 from ingestion.processing import clean_and_normalize_text
 from ingestion.processing_models import ExtractionError, ProcessedContent
+
+
+logger = get_logger(__name__)
 
 
 def get_ollama_client():
@@ -51,17 +57,26 @@ def extract_image_content(file_path: str) -> ProcessedContent:
         "setting, and actions. Do not guess unreadable content or invent facts; mark unclear "
         "text as illegible. Return plain text only."
     )
+    provider_started = time.perf_counter()
     try:
         response = client.chat(model=settings.OLLAMA_MODEL, messages=[{
             "role": "user", "content": prompt, "images": [str(path)]
         }])
         extracted = response.message.content
     except Exception as error:
+        log_event(logger, "INGEST_PROVIDER_ERROR", logging.WARNING, stage="image_vision",
+                  file=path.name, error=type(error).__name__,
+                  seconds=time.perf_counter() - provider_started)
         raise ExtractionError("Image vision extraction failed with the configured provider.") from error
+    log_event(logger, "INGEST_TIMING", stage="image_vision_provider", file=path.name,
+              seconds=time.perf_counter() - provider_started, status="success")
     text = clean_and_normalize_text(extracted or "")
     if not text:
         raise ExtractionError("The vision model returned no usable image content.")
     image_metadata["character_count"] = len(text)
+    log_event(logger, "INGEST_IMAGE_EXTRACTION_SUCCESS", file=path.name,
+              bytes=image_metadata["file_size_bytes"], chars=len(text),
+              model=settings.OLLAMA_MODEL)
     return ProcessedContent(text=text, metadata=image_metadata)
 
 
