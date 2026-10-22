@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
+import time
 from typing import Any
 
+from config.logging_config import get_logger, log_event
 from ingestion.processing import clean_and_normalize_text
 from ingestion.processing_models import ExtractionError, ProcessedContent
+
+logger = get_logger(__name__)
 
 SUPPORTED_AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".mpeg", ".mpga", ".webm", ".ogg", ".flac"})
 
@@ -30,6 +35,7 @@ def extract_audio_content(file_path: str) -> ProcessedContent:
         raise ValueError(f"Unsupported audio type: {extension or '(no extension)'}")
     from config.settings import settings
     client = get_groq_client()
+    provider_started = time.perf_counter()
     try:
         with path.open("rb") as audio_file:
             transcription = client.audio.transcriptions.create(
@@ -40,7 +46,12 @@ def extract_audio_content(file_path: str) -> ProcessedContent:
             )
         raw_text = transcription.text
     except Exception as error:
+        log_event(logger, "INGEST_PROVIDER_ERROR", logging.WARNING, stage="audio_transcription",
+                  file=path.name, error=type(error).__name__,
+                  seconds=time.perf_counter() - provider_started)
         raise ExtractionError("Audio transcription failed with the configured provider.") from error
+    log_event(logger, "INGEST_TIMING", stage="audio_transcription_provider", file=path.name,
+              seconds=time.perf_counter() - provider_started, status="success")
     text = clean_and_normalize_text(raw_text or "")
     if not text:
         raise ExtractionError("Speech-to-text returned no usable transcript.")
@@ -50,6 +61,9 @@ def extract_audio_content(file_path: str) -> ProcessedContent:
         "file_extension": extension, "file_size_bytes": path.stat().st_size,
         "character_count": len(text),
     }
+    log_event(logger, "INGEST_AUDIO_EXTRACTION_SUCCESS", file=path.name,
+              bytes=metadata["file_size_bytes"], chars=len(text),
+              model=settings.GROQ_WHISPER_MODEL)
     return ProcessedContent(text=text, metadata=metadata)
 
 
