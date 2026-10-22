@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import logging
 import time
 from typing import Any
 
@@ -106,14 +107,19 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
             raise ExtractionError("The PDF contains no pages.")
         metadata = _pdf_metadata(document)
         for index, page in enumerate(document, start=1):
+            page_started = time.perf_counter()
+            ocr_attempted = False
             try:
                 page_text = page.get_text("text") or ""
-            except Exception:
+            except Exception as error:
                 page_text = ""
                 warnings.append(f"Text extraction failed on PDF page {index}.")
+                log_event(logger, "INGEST_PDF_PAGE_ERROR", logging.WARNING, file=path.name,
+                          page=index, stage="text_extraction", error=type(error).__name__)
             page_text = clean_and_normalize_text(page_text)
             method = "pymupdf_text"
             if ocr_enabled and len(page_text) < min_chars:
+                ocr_attempted = True
                 try:
                     ocr_text = clean_and_normalize_text(_ocr_pdf_page(page, index))
                     if ocr_text and len(ocr_text) > len(page_text):
@@ -122,13 +128,19 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                         ocr_used = True
                     elif not page_text:
                         warnings.append(f"OCR did not produce usable text for PDF page {index}.")
-                except Exception:
+                except Exception as error:
                     warnings.append(f"OCR could not process PDF page {index}; available PDF text was retained.")
+                    log_event(logger, "INGEST_PDF_PAGE_ERROR", logging.WARNING, file=path.name,
+                              page=index, stage="ocr", error=type(error).__name__)
             if page_text:
                 rendered_text.append(f"[Page {index}]\n{page_text}")
             else:
                 warnings.append(f"PDF page {index} contains no extractable text.")
             page_records.append({"page": index, "character_count": len(page_text), "extraction_method": method})
+            log_event(logger, "INGEST_PDF_PAGE_PROGRESS", file=path.name, page=index,
+                      pages_total=len(document), chars=len(page_text), method=method,
+                      ocr_attempted=ocr_attempted,
+                      seconds=time.perf_counter() - page_started)
         metadata["pages"] = page_records
         metadata["pages_with_text"] = sum(1 for page in page_records if page["character_count"] > 0)
         metadata["extraction_method"] = "pymupdf_text+ollama_vision_ocr" if ocr_used else "pymupdf_text"
