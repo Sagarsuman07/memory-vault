@@ -9,8 +9,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import time
 import uuid
 
+from config.logging_config import get_logger, log_event
 from config.settings import settings
 from database.models import Memory
 from database.repositories import (
@@ -20,6 +22,8 @@ from database.repositories import (
     find_duplicate_content,
 )
 from ingestion.discovery import discover_upload, get_memory_type
+
+logger = get_logger(__name__)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
 UPLOAD_DIR = Path(settings.UPLOAD_DIR)
@@ -48,12 +52,14 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
         raise ValueError("Uploaded file content must be bytes.")
     data = bytes(data)
 
+    upload_started = time.perf_counter()
     memory_id = str(uuid.uuid4())
     file_path: Path | None = None
     source_created = False
     memory_created = False
     job_created = False
     try:
+        validation_started = time.perf_counter()
         descriptor = discover_upload(
             file_name,
             data,
@@ -62,7 +68,13 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             max_file_size=MAX_FILE_SIZE,
         )
         file_path = Path(descriptor.file_path)
+        log_event(logger, "INGEST_UPLOAD_VALIDATED", memory=memory_id, user=user_id,
+                  file=descriptor.file_name, media_type=descriptor.media_type,
+                  bytes=descriptor.size_bytes, seconds=time.perf_counter() - validation_started)
+        duplicate_started = time.perf_counter()
         duplicate_id = find_duplicate_content(user_id, descriptor.sha256)
+        log_event(logger, "INGEST_UPLOAD_DUPLICATE_LOOKUP", memory=memory_id, user=user_id,
+                  duplicate_found=bool(duplicate_id), seconds=time.perf_counter() - duplicate_started)
         warnings = []
         if duplicate_id:
             warnings.append(
@@ -103,6 +115,9 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
         memory_created = True
         job = create_preparation_job(memory_id, user_id, total_files=1)
         job_created = True
+        log_event(logger, "INGEST_UPLOAD_QUEUED", job=job.id, memory=memory_id, user=user_id,
+                  file=descriptor.file_name, bytes=descriptor.size_bytes,
+                  seconds=time.perf_counter() - upload_started)
 
         # Kick the daemon worker after all durable records exist. If startup fails,
         # the queued job remains recoverable on the next application startup.
@@ -113,7 +128,10 @@ def enqueue_new_memory(uploaded_file, title: str, user_id: str) -> dict[str, str
             pass
 
         return {"memory_id": memory_id, "job_id": job.id, "status": job.status.value}
-    except Exception:
+    except Exception as error:
+        log_event(logger, "INGEST_UPLOAD_ERROR", level=40, memory=memory_id, user=user_id,
+                  file=file_name or "unknown", error=type(error).__name__,
+                  seconds=time.perf_counter() - upload_started)
         # Remove only records/files created by this failed enqueue attempt. Do not
         # touch pre-existing memories or vector records.
         from database.database import get_connection
