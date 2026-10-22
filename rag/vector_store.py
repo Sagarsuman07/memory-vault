@@ -1,5 +1,6 @@
 """Safe, batched, verifiable Chroma indexing for Memory Vault."""
 from __future__ import annotations
+import logging
 import math
 from numbers import Real
 from pathlib import Path

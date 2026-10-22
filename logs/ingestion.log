@@ -290,3 +290,53 @@
 2026-10-23 02:11:26 | INFO | memory.duplicate_reuse | INGEST_DUPLICATE_REUSE job=e490837c-09dc-4b76-883a-3f2893b51f60 memory=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b file=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b.pdf source_memory=1d93a57e-d7a4-46a5-b098-8e959182f149 target_memory=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b chunks=349 skipped_stages=extraction,ocr,embedding seconds=23.214
 2026-10-23 02:11:32 | INFO | memory.background_worker | INGEST_TIMING stage=final_index_verification file=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b.pdf seconds=0.332 records=349 valid=True
 2026-10-23 02:11:34 | INFO | memory.background_worker | INGEST_JOB_SUCCESS job=e490837c-09dc-4b76-883a-3f2893b51f60 memory=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b file=d5bc3794-ec95-450a-a9e1-8e0e3b1b147b.pdf mode=duplicate_reuse reused_from=1d93a57e-d7a4-46a5-b098-8e959182f149 chunks=349 seconds=30.708 attempt=1
+2026-10-23 02:50:02 | INFO | ingestion.audio_processor | INGEST_TIMING stage=audio_transcription_provider file=voice.wav seconds=0.003 status=success
+2026-10-23 02:50:02 | INFO | ingestion.audio_processor | INGEST_AUDIO_EXTRACTION_SUCCESS file=voice.wav bytes=16 chars=29 model=whisper-large-v3-turbo
+2026-10-23 02:50:03 | INFO | ingestion.image_processor | INGEST_TIMING stage=image_vision_provider file=test.png seconds=0.000 status=success
+2026-10-23 02:50:03 | INFO | ingestion.image_processor | INGEST_IMAGE_EXTRACTION_SUCCESS file=test.png bytes=83 chars=19 model=gemma4:31b-cloud
+2026-10-23 02:50:04 | INFO | ingestion.document_processor | INGEST_PDF_PAGE_PROGRESS file=scanned.pdf page=1 pages_total=1 chars=23 method=ollama_vision_ocr ocr_attempted=True seconds=0.001
+2026-10-23 02:50:04 | INFO | ingestion.document_processor | INGEST_TIMING stage=pdf_text_extraction file=scanned.pdf seconds=0.083 pages=1 ocr_enabled=True ocr_used=True pages_with_text=1
+2026-10-23 02:50:05 | INFO | ingestion.document_processor | INGEST_PDF_PAGE_PROGRESS file=notes.pdf page=1 pages_total=2 chars=33 method=pymupdf_text ocr_attempted=False seconds=0.040
+2026-10-23 02:50:05 | INFO | ingestion.document_processor | INGEST_PDF_PAGE_PROGRESS file=notes.pdf page=2 pages_total=2 chars=30 method=pymupdf_text ocr_attempted=False seconds=0.001
+2026-10-23 02:50:05 | INFO | ingestion.document_processor | INGEST_TIMING stage=pdf_text_extraction file=notes.pdf seconds=0.102 pages=2 ocr_enabled=True ocr_used=False pages_with_text=2
+2026-10-23 02:50:06 | INFO | ingestion.document_processor | INGEST_PDF_PAGE_PROGRESS file=scanned.pdf page=1 pages_total=1 chars=0 method=pymupdf_text ocr_attempted=False seconds=0.000
+2026-10-23 02:50:09 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:09 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-123 seconds=0.001 chunks=1 dimension=2
+2026-10-23 02:50:09 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-123 batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:09 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-123 seconds=0.002 chunks=1
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.001 chunks=1 dimension=3
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.002 chunks=1
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.005 chunks=1 dimension=3
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.001 chunks=1
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=2 start=2 items=2 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=3 start=4 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.033 chunks=5 dimension=3
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=2 start=2 items=2 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=3 start=4 items=1 seconds=0.000
+2026-10-23 02:50:10 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.011 chunks=5
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.001 chunks=2 dimension=3
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.003 chunks=2
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:11 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.003 chunks=1 dimension=3
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.001 chunks=2 dimension=3
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=2 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.001 chunks=2
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.001 chunks=1 dimension=3
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.001 chunks=1
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_EMBEDDING_BATCH_SUCCESS batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=embedding memory=memory-a seconds=0.001 chunks=1 dimension=3
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_CHROMA_BATCH_SUCCESS memory=memory-a batch=1 start=0 items=1 seconds=0.000
+2026-10-23 02:50:14 | INFO | rag.vector_store | INGEST_TIMING stage=chroma_indexing memory=memory-a seconds=0.001 chunks=1
