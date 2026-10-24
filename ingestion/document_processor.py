@@ -106,8 +106,7 @@ def _ocr_pdf_page(page_or_image_path: fitz.Page | str | Path,
     from ingestion.image_processor import extract_image_content
 
     if isinstance(page_or_image_path, fitz.Page):
-        with (TemporaryDirectory(prefix="memory_vault_pdf_ocr_")
-              if ocr_enabled else nullcontext(None)) as temp_dir:
+        with TemporaryDirectory(prefix="memory_vault_pdf_ocr_") as temp_dir:
             image_path = Path(temp_dir) / f"page_{page_number}.png"
             _render_ocr_pdf_page(page_or_image_path, page_number,
                                  file_name or "unknown", image_path)
@@ -327,7 +326,11 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
         metadata = _pdf_metadata(document)
         # Rendering remains on this thread because PyMuPDF document/page objects
         # are not passed to workers. Only independent provider calls run in parallel.
-        with TemporaryDirectory(prefix="memory_vault_pdf_ocr_") as temp_dir:
+        temp_context = (
+            TemporaryDirectory(prefix="memory_vault_pdf_ocr_")
+            if ocr_enabled else nullcontext(None)
+        )
+        with temp_context as temp_dir:
             executor = (
                 ThreadPoolExecutor(max_workers=ocr_workers, thread_name_prefix="pdf-ocr")
                 if ocr_enabled else None
