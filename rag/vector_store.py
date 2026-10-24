@@ -264,7 +264,6 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
                 final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
                 final_ids = list(final.get("ids") or [])
                 timer.set(actual_records=len(final_ids))
-            final_ids = list(final.get("ids") or [])
             if set(final_ids) != expected_ids or len(final_ids) != len(expected_ids):
                 raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
             log_event(logger, "INGEST_TIMING", stage="chroma_indexing", memory=memory_id,
