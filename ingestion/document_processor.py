@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import nullcontext
+from contextvars import copy_context
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -395,9 +396,11 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                                 base_delay, max_delay
                             )[0]
                         else:
+                            task_context = copy_context()
                             future = executor.submit(
-                                _ocr_pdf_page_with_retries, str(image_path), index,
-                                path.name, max_retries, base_delay, max_delay
+                                task_context.run, _ocr_pdf_page_with_retries,
+                                str(image_path), index, path.name, max_retries,
+                                base_delay, max_delay
                             )
                             pending[future] = record
                             record["page_completed_at"] = None
