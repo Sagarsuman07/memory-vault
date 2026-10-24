@@ -334,12 +334,13 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
         with temp_context as temp_dir:
             executor = (
                 ThreadPoolExecutor(max_workers=ocr_workers, thread_name_prefix="pdf-ocr")
-                if ocr_enabled else None
+                if ocr_enabled and ocr_workers > 1 else None
             )
             pending: dict[Future, dict[str, Any]] = {}
             try:
                 if ocr_enabled:
                     log_event(logger, "INGEST_PDF_OCR_PARALLEL_START", file=path.name,
+                              mode="parallel" if executor is not None else "sequential",
                               workers=ocr_workers, max_retries=max_retries,
                               eligible_threshold_chars=min_chars)
                 for index, page in enumerate(document, start=1):
@@ -390,11 +391,17 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                     try:
                         _render_ocr_pdf_page(page, index, path.name, image_path)
                         if executor is None:
-                            # Defensive fallback: OCR cannot run in parallel unless enabled.
-                            record["ocr_text"] = _ocr_pdf_page_with_retries(
+                            # Explicit sequential fallback; useful for safe diagnosis and benchmarks.
+                            ocr_text, retries, error_name = _ocr_pdf_page_with_retries(
                                 str(image_path), index, path.name, max_retries,
                                 base_delay, max_delay
-                            )[0]
+                            )
+                            record["ocr_text"] = ocr_text
+                            record["ocr_retries"] = retries
+                            record["ocr_error"] = error_name
+                            record["page_completed_at"] = time.perf_counter()
+                            _log_pdf_page_progress(record, len(document))
+                            image_path.unlink(missing_ok=True)
                         else:
                             task_context = copy_context()
                             future = executor.submit(
