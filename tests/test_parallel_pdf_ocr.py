@@ -1,5 +1,4 @@
 """Regression tests for bounded, parallel OCR in PDF extraction."""
-import logging
 import tempfile
 import threading
 import time
@@ -169,6 +168,31 @@ class ParallelPdfOcrTests(unittest.TestCase):
         self.assertTrue(_is_retryable_ocr_error(_ProviderError(503)))
         self.assertFalse(_is_retryable_ocr_error(_ProviderError(400)))
         self.assertFalse(_is_retryable_ocr_error(ValueError("invalid image input")))
+
+    def test_worker_limit_one_provides_sequential_fallback(self):
+        path = self.root / "sequential.pdf"
+        _create_pdf(path, 3)
+        active = 0
+        maximum_active = 0
+        lock = threading.Lock()
+
+        def fake_ocr(_image_path, page_number, _file_name):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            time.sleep(0.01)
+            with lock:
+                active -= 1
+            return f"Sequential page {page_number}"
+
+        with patch.object(settings, "PDF_OCR_WORKERS", 1), \\
+             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr):
+            result = extract_pdf_content(str(path))
+
+        self.assertEqual(maximum_active, 1)
+        self.assertLess(result.text.index("Sequential page 1"),
+                        result.text.index("Sequential page 2"))
 
 
 if __name__ == "__main__":

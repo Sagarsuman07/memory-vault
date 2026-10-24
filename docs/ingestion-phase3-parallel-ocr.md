@@ -9,7 +9,7 @@ PDF text extraction and page rendering remain on the thread that owns the PyMuPD
 ## Configuration
 
 - `PDF_OCR_ENABLED`: remains disabled by default.
-- `PDF_OCR_WORKERS`: maximum concurrent OCR provider calls; defaults to 3. Set to 1 for the sequential fallback.
+- `PDF_OCR_WORKERS`: maximum concurrent OCR provider calls; defaults to 3, with a supported maximum of 8. Set to 1 for the sequential fallback.
 - `PDF_OCR_MAX_RETRIES`: additional retries for transient errors; defaults to 2 (up to 3 total attempts).
 - `PDF_OCR_RETRY_BASE_DELAY_SECONDS`: exponential backoff base; defaults to 1 second.
 - `PDF_OCR_RETRY_MAX_DELAY_SECONDS`: cap for computed exponential backoff; defaults to 8 seconds. Provider `Retry-After` guidance is honored even if longer than this cap.
@@ -26,8 +26,12 @@ Retries are limited to common transient HTTP statuses (408, 425, 429, 500, 502, 
 
 ## Tests
 
-Run focused OCR and extraction tests:
+Run focused test modules from the repository root:
 
-`python -m unittest tests.test_parallel_pdf_ocr tests.test_phase3_processing tests.test_ingestion_logging`
+`python -m unittest discover -s tests -p "test_parallel_pdf_ocr.py"`
+
+`python -m unittest discover -s tests -p "test_phase3_processing.py"`
+
+`python -m unittest discover -s tests -p "test_ingestion_logging.py"`
 
 The parallel OCR tests cover output order under out-of-order completion, worker bounds, retry-after handling, retry exhaustion, permanent-error non-retry, and page-level failure isolation. The end-to-end performance comparison remains part of final Phase 5 validation; no performance gain is claimed until measured on the same OCR-heavy PDF.

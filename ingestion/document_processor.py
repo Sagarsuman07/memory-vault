@@ -7,6 +7,7 @@ processor; it is disabled by default to avoid unexpected API calls/costs.
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -105,7 +106,8 @@ def _ocr_pdf_page(page_or_image_path: fitz.Page | str | Path,
     from ingestion.image_processor import extract_image_content
 
     if isinstance(page_or_image_path, fitz.Page):
-        with TemporaryDirectory(prefix="memory_vault_pdf_ocr_") as temp_dir:
+        with (TemporaryDirectory(prefix="memory_vault_pdf_ocr_")
+              if ocr_enabled else nullcontext(None)) as temp_dir:
             image_path = Path(temp_dir) / f"page_{page_number}.png"
             _render_ocr_pdf_page(page_or_image_path, page_number,
                                  file_name or "unknown", image_path)
@@ -156,6 +158,7 @@ def _is_retryable_ocr_error(error: BaseException) -> bool:
     retryable_names = (
         "timeout", "connecterror", "connectionerror", "remoteprotocolerror",
         "temporarilyunavailable", "ratelimit", "toomanyrequests",
+        "networkerror", "readerror", "writeerror", "pooltimeout", "protocolerror",
     )
     if any(token in name_text for token in retryable_names):
         return True
@@ -247,6 +250,25 @@ def _ocr_pdf_page_with_retries(
             retries += 1
 
 
+def _log_pdf_page_progress(record: dict[str, Any], pages_total: int) -> None:
+    """Emit each page's progress as soon as its own extraction/OCR work completes."""
+    if record.get("progress_logged"):
+        return
+    page_text = record["text"]
+    method = record["method"]
+    if record["ocr_attempted"] and record["ocr_error"] is None:
+        ocr_text = clean_and_normalize_text(record["ocr_text"] or "")
+        if ocr_text and len(ocr_text) > len(page_text):
+            page_text = ocr_text
+            method = "ollama_vision_ocr"
+    completed_at = record.get("page_completed_at") or time.perf_counter()
+    log_event(logger, "INGEST_PDF_PAGE_PROGRESS", file=record["file_name"],
+              page=record["page"], pages_total=pages_total, chars=len(page_text),
+              method=method, ocr_attempted=record["ocr_attempted"],
+              seconds=max(0.0, completed_at - record["page_started_at"]))
+    record["progress_logged"] = True
+
+
 def _collect_completed_ocr(
     completed: set[Future],
     pending: dict[Future, dict[str, Any]],
@@ -265,6 +287,7 @@ def _collect_completed_ocr(
         record["ocr_retries"] = retries
         record["ocr_error"] = error_name
         record["page_completed_at"] = time.perf_counter()
+        _log_pdf_page_progress(record, record["pages_total"])
         try:
             record["image_path"].unlink(missing_ok=True)
         except OSError:
@@ -337,6 +360,7 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
 
                     record: dict[str, Any] = {
                         "page": index,
+                        "pages_total": len(document),
                         "file_name": path.name,
                         "text": page_text,
                         "method": "pymupdf_text",
@@ -352,6 +376,7 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                     page_records.append(record)
 
                     if not (ocr_enabled and page_ocr_eligible):
+                        _log_pdf_page_progress(record, len(document))
                         continue
 
                     record["ocr_attempted"] = True
@@ -388,6 +413,17 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                         log_event(logger, "INGEST_PDF_PAGE_ERROR", logging.WARNING,
                                   file=path.name, page=index, stage="ocr_render",
                                   error=type(error).__name__)
+                        _log_pdf_page_progress(record, len(document))
+
+                    # Collect finished tasks promptly, even when the current
+                    # document has fewer pending OCR pages than the worker limit.
+                    if pending:
+                        if len(pending) >= ocr_workers:
+                            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                        else:
+                            completed, _ = wait(pending, timeout=0, return_when=FIRST_COMPLETED)
+                        if completed:
+                            _collect_completed_ocr(completed, pending)
 
                 while pending:
                     completed, _ = wait(pending, return_when=FIRST_COMPLETED)
@@ -424,11 +460,6 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                 rendered_text.append(f"[Page {index}]\n{page_text}")
             else:
                 warnings.append(f"PDF page {index} contains no extractable text.")
-            log_event(logger, "INGEST_PDF_PAGE_PROGRESS", file=path.name, page=index,
-                      pages_total=len(document), chars=len(page_text), method=record["method"],
-                      ocr_attempted=record["ocr_attempted"],
-                      seconds=max(0.0, (record["page_completed_at"] or time.perf_counter())
-                                  - record["page_started_at"]))
 
         metadata["pages"] = [
             {"page": record["page"], "character_count": len(record["text"]),
