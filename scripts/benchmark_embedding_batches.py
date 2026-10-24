@@ -95,6 +95,7 @@ def main() -> int:
         parser.error("Input file contains no non-empty chunk lines.")
 
     # Import after argument validation so usage errors do not initialize model dependencies.
+    from config.settings import settings
     from rag.embeddings import get_embeddings
 
     init_started = time.perf_counter()
@@ -138,7 +139,7 @@ def main() -> int:
         "benchmark": "embedding_batch_size",
         "input_file": str(args.input),
         "chunk_count": len(texts),
-        "embedding_model": getattr(get_embeddings(), "model_name", None),
+        "embedding_model": settings.EMBEDDING_MODEL,
         "initialization_seconds_first_access": round(initialization_seconds, 4),
         "initialization_seconds_cached_access": round(warm_access_seconds, 6),
         "warmup_items": warmup_count,
