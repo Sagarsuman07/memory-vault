@@ -149,8 +149,8 @@ class PdfTimingLoggingTests(unittest.TestCase):
             document.save(str(path))
             document.close()
 
-            with patch.object(settings, "PDF_OCR_ENABLED", False), \\
-                 patch.object(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20), \\
+            with patch.object(settings, "PDF_OCR_ENABLED", False), \
+                 patch.object(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20), \
                  patch("ingestion.document_processor.log_event") as event:
                 extract_pdf_content(str(path))
 
