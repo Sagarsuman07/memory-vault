@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from datetime import datetime, timezone
 import json
 import logging
 import threading
 import time
 
-from config.logging_config import StageTimer, get_logger, log_event
+from config.logging_config import StageTimer, get_logger, log_context, log_event
 from config.settings import settings
 from database.database import get_connection
 from database.repositories import (
@@ -88,7 +89,20 @@ def _advance(job_id: str, user_id: str, stage: PipelineStage, *, completed: int 
     update_preparation_job_progress(job_id, user_id, stage, completed_files=completed, total_files=1)
 
 
-def process_preparation_job(job_id: str, user_id: str) -> bool:
+def _queue_wait_seconds(created_at: str | None) -> float | None:
+    """Calculate enqueue-to-start delay from the persisted UTC creation timestamp."""
+    if not created_at:
+        return None
+    try:
+        queued_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if queued_at.tzinfo is None:
+            queued_at = queued_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - queued_at.astimezone(timezone.utc)).total_seconds())
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _process_preparation_job_impl(job_id: str, user_id: str) -> bool:
     """Run one queued/retrying job; True means extraction and index verification succeeded.
 
     Before any expensive work, the worker checks for a completed memory with the
@@ -124,6 +138,11 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
 
         attempt_started = time.perf_counter()
         attempt_number = job.attempt_count + 1
+        queue_wait = _queue_wait_seconds(job.created_at) if attempt_number == 1 else None
+        if attempt_number == 1:
+            log_event(logger, "INGEST_QUEUE_WAIT", job=job_id, memory=job.memory_id,
+                      user=user_id, seconds=queue_wait, queued_at=job.created_at,
+                      attempt=attempt_number)
         file_label = "unknown"
         mode = "fresh"
         stage = PipelineStage.DISCOVERY
@@ -134,7 +153,7 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
             source_path = Path(row["file_path"])
             file_label = source_path.name
             log_event(logger, "INGEST_JOB_START", job=job_id, memory=job.memory_id, user=user_id,
-                      file=file_label, attempt=attempt_number)
+                      file=file_label, attempt=attempt_number, queue_wait_seconds=queue_wait)
             if not source_path.is_file():
                 raise FileNotFoundError("Stored source file is missing.")
 
@@ -319,6 +338,12 @@ def process_preparation_job(job_id: str, user_id: str) -> bool:
             except Exception:
                 pass
             return False
+
+
+def process_preparation_job(job_id: str, user_id: str) -> bool:
+    """Run a preparation job with correlation fields attached to nested log events."""
+    with log_context(job=job_id, user=user_id):
+        return _process_preparation_job_impl(job_id, user_id)
 
 
 def _recover_interrupted_jobs_on_startup() -> None:

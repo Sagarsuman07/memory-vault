@@ -11,7 +11,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from config.settings import settings
 from rag.embeddings import get_embeddings
-from config.logging_config import get_logger, log_event
+from config.logging_config import StageTimer, get_logger, log_event, timed_lock
 
 logger = get_logger(__name__)
 
@@ -32,10 +32,20 @@ _EMBEDDING_LOCK = threading.Semaphore(
 def get_vector_store():
     """Return the existing persistent Chroma vector store."""
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    with _CLIENT_LOCK:
-        return Chroma(collection_name=COLLECTION_NAME,
-                      embedding_function=get_embeddings(),
-                      persist_directory=str(CHROMA_DIR))
+    with timed_lock(logger, _CLIENT_LOCK, "chroma_client", "construct_client"):
+        started = time.perf_counter()
+        try:
+            store = Chroma(collection_name=COLLECTION_NAME,
+                           embedding_function=get_embeddings(),
+                           persist_directory=str(CHROMA_DIR))
+        except Exception as error:
+            log_event(logger, "INGEST_COMPONENT_INITIALIZATION", logging.WARNING,
+                      component="chroma_client", status="error", error=type(error).__name__,
+                      seconds=time.perf_counter() - started)
+            raise
+        log_event(logger, "INGEST_COMPONENT_INITIALIZATION", component="chroma_client",
+                  status="success", seconds=time.perf_counter() - started)
+        return store
 
 
 def _as_list(value: Any) -> list:
@@ -62,7 +72,8 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
         # Release the shared embedding slot after each batch, so a small memory
         # can make progress between batches of a large memory.
         try:
-            with _EMBEDDING_LOCK:
+            with timed_lock(logger, _EMBEDDING_LOCK, "embedding", "embed_batch",
+                             batch=batch_number, items=len(batch)):
                 raw = embedder.embed_documents(batch)
         except Exception as error:
             log_event(logger, "INGEST_EMBEDDING_BATCH_ERROR", logging.WARNING,
@@ -197,7 +208,8 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
     # collection operations. Do not hold this lock during potentially slow model
     # inference; different jobs can prepare their embeddings independently.
     collection = get_vector_store()._collection
-    with _CHROMA_LOCK:
+    with timed_lock(logger, _CHROMA_LOCK, "chroma", "read_collection_dimension",
+                    memory=memory_id):
         existing_dimension = _collection_dimension(collection)
 
     if progress_callback:
@@ -216,14 +228,18 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
     # Snapshot + upsert + verify + stale cleanup + rollback are one critical
     # section so two jobs cannot interleave writes to the shared collection.
     chroma_started = time.perf_counter()
-    with _CHROMA_LOCK:
-        old = _snapshot(collection, memory_id)
+    with timed_lock(logger, _CHROMA_LOCK, "chroma", "replace_memory_index",
+                    memory=memory_id, chunks=len(ids)):
+        with StageTimer(logger, "chroma_snapshot", memory=memory_id) as timer:
+            old = _snapshot(collection, memory_id)
+            timer.set(records=len(old["ids"]))
         current_dimension = _collection_dimension(collection)
         if current_dimension is not None and current_dimension != dimension:
             raise ValueError(
                 f"Embedding dimension mismatch: collection has {current_dimension}, generated {dimension}."
             )
         try:
+            upsert_started = time.perf_counter()
             for start in range(0, len(ids), batch_size):
                 end = start + batch_size
                 batch_started = time.perf_counter()
@@ -232,12 +248,22 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
                 log_event(logger, "INGEST_CHROMA_BATCH_SUCCESS", memory=memory_id,
                           batch=start // batch_size + 1, start=start,
                           items=len(ids[start:end]), seconds=time.perf_counter() - batch_started)
-            _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
+            log_event(logger, "INGEST_TIMING", stage="chroma_upsert", memory=memory_id,
+                      seconds=time.perf_counter() - upsert_started, chunks=len(ids),
+                      batches=(len(ids) + batch_size - 1) // batch_size)
+            with StageTimer(logger, "chroma_verification", memory=memory_id, chunks=len(ids)):
+                _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
             expected_ids = set(ids)
-            stale = [x for x in old["ids"] if x not in expected_ids]
-            if stale:
-                collection.delete(ids=stale)
-            final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
+            with StageTimer(logger, "chroma_stale_cleanup", memory=memory_id) as timer:
+                stale = [x for x in old["ids"] if x not in expected_ids]
+                if stale:
+                    collection.delete(ids=stale)
+                timer.set(stale_records=len(stale))
+            with StageTimer(logger, "chroma_final_verification", memory=memory_id,
+                            expected_records=len(expected_ids)) as timer:
+                final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
+                final_ids = list(final.get("ids") or [])
+                timer.set(actual_records=len(final_ids))
             final_ids = list(final.get("ids") or [])
             if set(final_ids) != expected_ids or len(final_ids) != len(expected_ids):
                 raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
@@ -249,7 +275,9 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
                       error=type(error).__name__, chunks=len(ids),
                       seconds=time.perf_counter() - chroma_started)
             try:
-                _rollback(collection, memory_id, old, ids)
+                with StageTimer(logger, "chroma_rollback", memory=memory_id,
+                                attempted_records=len(ids), restored_records=len(old["ids"])):
+                    _rollback(collection, memory_id, old, ids)
             except Exception as rollback_error:
                 log_event(logger, "INGEST_CHROMA_ROLLBACK_ERROR", logging.CRITICAL,
                           memory=memory_id, error=type(rollback_error).__name__)
@@ -265,7 +293,8 @@ def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None =
     """Return a diagnostic report for indexed records belonging to one memory."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
-    with _CHROMA_LOCK:
+    with timed_lock(logger, _CHROMA_LOCK, "chroma", "verify_memory_index",
+                    memory=memory_id):
         data = get_vector_store()._collection.get(where={"memory_id": memory_id},
                                                    include=["embeddings", "documents", "metadatas"])
     ids = list(data.get("ids") or [])
@@ -339,7 +368,8 @@ def clone_memory_index(*, source_memory_id: str, target_memory_id: str, user_id:
         raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero.")
 
     collection = get_vector_store()._collection
-    with _CHROMA_LOCK:
+    with timed_lock(logger, _CHROMA_LOCK, "chroma", "read_duplicate_source_vectors",
+                    memory=source_memory_id, target_memory=target_memory_id):
         data = collection.get(where={"memory_id": source_memory_id},
                               include=["embeddings", "documents", "metadatas"])
         ids = list(data.get("ids") or [])
@@ -384,27 +414,42 @@ def clone_memory_index(*, source_memory_id: str, target_memory_id: str, user_id:
         if collection_dimension is not None and collection_dimension != dimension:
             raise VectorReuseError("dimension_mismatch")
 
-        old = _snapshot(collection, target_memory_id)
+        with StageTimer(logger, "chroma_snapshot", memory=target_memory_id) as timer:
+            old = _snapshot(collection, target_memory_id)
+            timer.set(records=len(old["ids"]))
         try:
+            upsert_started = time.perf_counter()
             for start in range(0, len(new_ids), batch_size):
                 end = start + batch_size
                 collection.upsert(ids=new_ids[start:end], embeddings=new_vectors[start:end],
                                   documents=list(expected_texts[start:end]),
                                   metadatas=new_metadatas[start:end])
-            _verify_records(collection, target_memory_id, new_ids, list(expected_texts),
-                            new_metadatas, dimension)
+            log_event(logger, "INGEST_TIMING", stage="chroma_clone_upsert", memory=target_memory_id,
+                      seconds=time.perf_counter() - upsert_started, chunks=len(new_ids),
+                      batches=(len(new_ids) + batch_size - 1) // batch_size)
+            with StageTimer(logger, "chroma_verification", memory=target_memory_id,
+                            chunks=len(new_ids)):
+                _verify_records(collection, target_memory_id, new_ids, list(expected_texts),
+                                new_metadatas, dimension)
             expected_set = set(new_ids)
-            stale = [x for x in old["ids"] if x not in expected_set]
-            if stale:
-                collection.delete(ids=stale)
-            final = collection.get(where={"memory_id": target_memory_id}, include=["metadatas"])
-            final_ids = list(final.get("ids") or [])
+            with StageTimer(logger, "chroma_stale_cleanup", memory=target_memory_id) as timer:
+                stale = [x for x in old["ids"] if x not in expected_set]
+                if stale:
+                    collection.delete(ids=stale)
+                timer.set(stale_records=len(stale))
+            with StageTimer(logger, "chroma_final_verification", memory=target_memory_id,
+                            expected_records=len(expected_set)) as timer:
+                final = collection.get(where={"memory_id": target_memory_id}, include=["metadatas"])
+                final_ids = list(final.get("ids") or [])
+                timer.set(actual_records=len(final_ids))
             if set(final_ids) != expected_set or len(final_ids) != len(expected_set):
                 raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
             return len(new_ids)
         except Exception as error:
             try:
-                _rollback(collection, target_memory_id, old, new_ids)
+                with StageTimer(logger, "chroma_rollback", memory=target_memory_id,
+                                attempted_records=len(new_ids), restored_records=len(old["ids"])):
+                    _rollback(collection, target_memory_id, old, new_ids)
             except Exception as rollback_error:
                 raise RuntimeError(
                     "Vector clone failed and rollback also failed. Inspect/restore Chroma before retrying. "

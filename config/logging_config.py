@@ -14,6 +14,8 @@ Optional environment overrides (all have safe defaults):
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 import os
 import re
@@ -31,6 +33,7 @@ _NAMESPACES = ("ingestion", "memory", "rag")
 _SETUP_LOCK = threading.Lock()
 _CONFIGURED = False
 _WHITESPACE = re.compile(r"\s+")
+_LOG_CONTEXT: ContextVar[dict[str, str] | None] = ContextVar("memory_vault_log_context", default=None)
 
 
 def _env_int(name: str, default: int, minimum: int) -> int:
@@ -99,6 +102,18 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+@contextmanager
+def log_context(**fields):
+    """Attach safe correlation fields to log events in the current execution context."""
+    current = dict(_LOG_CONTEXT.get() or {})
+    current.update({key: str(value) for key, value in fields.items() if value is not None})
+    token = _LOG_CONTEXT.set(current)
+    try:
+        yield
+    finally:
+        _LOG_CONTEXT.reset(token)
+
+
 def _format_value(value) -> str:
     if isinstance(value, bool):
         return "True" if value else "False"
@@ -111,12 +126,47 @@ def _format_value(value) -> str:
 def log_event(logger: logging.Logger, event: str, level: int = logging.INFO, **fields) -> None:
     """Write ``EVENT key=value key=value`` on one line. Never raises."""
     try:
+        context = _LOG_CONTEXT.get()
+        if context:
+            fields = {**context, **fields}
         parts = " ".join(
             f"{key}={_format_value(value)}" for key, value in fields.items() if value is not None
         )
         logger.log(level, "%s %s", event, parts)
     except Exception:
         pass
+
+
+@contextmanager
+def timed_lock(logger: logging.Logger, lock, lock_name: str, operation: str, **fields):
+    """Acquire a lock and log wait/hold durations without changing exception behavior."""
+    wait_started = time.perf_counter()
+    lock.acquire()
+    wait_seconds = time.perf_counter() - wait_started
+    hold_started = time.perf_counter()
+    status = "success"
+    error_name = None
+    try:
+        yield
+    except BaseException as error:
+        status = "error"
+        error_name = type(error).__name__
+        raise
+    finally:
+        hold_seconds = time.perf_counter() - hold_started
+        lock.release()
+        log_event(
+            logger,
+            "INGEST_LOCK_TIMING",
+            logging.WARNING if error_name else logging.INFO,
+            lock=lock_name,
+            operation=operation,
+            wait_seconds=wait_seconds,
+            hold_seconds=hold_seconds,
+            status=status,
+            error=error_name,
+            **fields,
+        )
 
 
 class StageTimer:

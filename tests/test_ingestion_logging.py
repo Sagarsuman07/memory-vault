@@ -1,9 +1,10 @@
 """Focused tests for safe, failure-tolerant ingestion logging."""
 import logging
 import unittest
-from unittest.mock import Mock
+from threading import Lock
+from unittest.mock import Mock, patch
 
-from config.logging_config import StageTimer, _format_value, log_event
+from config.logging_config import StageTimer, _format_value, log_context, log_event, timed_lock
 
 
 class IngestionLoggingTests(unittest.TestCase):
@@ -51,6 +52,87 @@ class IngestionLoggingTests(unittest.TestCase):
         self.assertIn("INGEST_TIMING", args[2])
         self.assertIn("status=error", args[3])
         self.assertIn("error=ValueError", args[3])
+
+    def test_timed_lock_logs_wait_and_hold_durations(self):
+        logger = Mock()
+        with timed_lock(logger, Lock(), "test_lock", "test_operation", memory="memory-1"):
+            pass
+        logger.log.assert_called_once()
+        args = logger.log.call_args.args
+        self.assertIn("INGEST_LOCK_TIMING", args[2])
+        self.assertIn("lock=test_lock", args[3])
+        self.assertIn("operation=test_operation", args[3])
+        self.assertIn("wait_seconds=", args[3])
+        self.assertIn("hold_seconds=", args[3])
+
+    def test_timed_lock_releases_lock_after_exception(self):
+        logger = Mock()
+        lock = Lock()
+        with self.assertRaisesRegex(ValueError, "lock body failed"):
+            with timed_lock(logger, lock, "test_lock", "test_operation"):
+                raise ValueError("lock body failed")
+        self.assertTrue(lock.acquire(blocking=False))
+        lock.release()
+        self.assertIn("status=error", logger.log.call_args.args[3])
+
+    def test_log_context_adds_correlation_fields_without_overriding_explicit_fields(self):
+        logger = Mock()
+        with log_context(job="job-1", user="user-1"):
+            log_event(logger, "INGEST_CONTEXT_TEST", memory="memory-1", job="explicit-job")
+        args = logger.log.call_args.args
+        self.assertIn("job=explicit-job", args[3])
+        self.assertIn("user=user-1", args[3])
+        self.assertIn("memory=memory-1", args[3])
+
+
+class QueueWaitLoggingTests(unittest.TestCase):
+    def test_queue_wait_seconds_uses_persisted_timestamp(self):
+        from datetime import datetime, timedelta, timezone
+        from memory.background_worker import _queue_wait_seconds
+
+        created_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        seconds = _queue_wait_seconds(created_at)
+        self.assertIsNotNone(seconds)
+        self.assertGreaterEqual(seconds, 4.0)
+        self.assertLess(seconds, 10.0)
+
+    def test_queue_wait_seconds_ignores_invalid_timestamp(self):
+        from memory.background_worker import _queue_wait_seconds
+
+        self.assertIsNone(_queue_wait_seconds("not-a-timestamp"))
+
+
+class PdfTimingLoggingTests(unittest.TestCase):
+    def test_pdf_ocr_summary_counts_attempts_and_preserves_page_order(self):
+        import tempfile
+        from pathlib import Path
+        import fitz
+        from ingestion.document_processor import extract_pdf_content
+        from config.settings import settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "two-pages.pdf"
+            document = fitz.open()
+            page1 = document.new_page()
+            page1.insert_text((72, 72), "This is page one with enough searchable text.")
+            document.new_page()
+            document.save(str(path))
+            document.close()
+
+            with patch.object(settings, "PDF_OCR_ENABLED", True), \
+                 patch.object(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20), \
+                 patch("ingestion.document_processor._ocr_pdf_page", return_value="OCR text from page two"), \
+                 patch("ingestion.document_processor.log_event") as event:
+                result = extract_pdf_content(str(path))
+
+        self.assertLess(result.text.index("page one"), result.text.index("OCR text from page two"))
+        summary = next(call for call in event.call_args_list
+                       if call.args[1] == "INGEST_PDF_OCR_SUMMARY")
+        self.assertEqual(summary.kwargs["eligible"], 1)
+        self.assertEqual(summary.kwargs["attempted"], 1)
+        self.assertEqual(summary.kwargs["succeeded"], 1)
+        self.assertEqual(summary.kwargs["failed"], 0)
+        self.assertEqual(summary.kwargs["retried"], 0)
 
 
 class ProviderLoggingTests(unittest.TestCase):

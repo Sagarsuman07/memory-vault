@@ -19,7 +19,7 @@ from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-from config.logging_config import get_logger, log_event
+from config.logging_config import StageTimer, get_logger, log_event
 from config.settings import settings
 from ingestion.processing import clean_and_normalize_text
 from ingestion.processing_models import ExtractionError, ProcessedContent
@@ -75,11 +75,15 @@ def _pdf_metadata(document: fitz.Document) -> dict[str, Any]:
     return result
 
 
-def _ocr_pdf_page(page: fitz.Page, page_number: int) -> str:
+def _ocr_pdf_page(page: fitz.Page, page_number: int, file_name: str | None = None) -> str:
     """Run the existing image vision processor on a rendered page."""
     from ingestion.image_processor import extract_image_content
     dpi = max(72, min(int(getattr(settings, "PDF_OCR_DPI", 144)), 300))
-    pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+    with StageTimer(logger, "pdf_ocr_page_render", file=file_name or "unknown",
+                    page=page_number, dpi=dpi) as timer:
+        pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+        timer.set(width=pixmap.width, height=pixmap.height,
+                  image_bytes=pixmap.stride * pixmap.height)
     with TemporaryDirectory(prefix="memory_vault_pdf_ocr_") as temp_dir:
         image_path = Path(temp_dir) / f"page_{page_number}.png"
         pixmap.save(str(image_path))
@@ -98,8 +102,15 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
     ocr_used = False
     ocr_enabled = bool(getattr(settings, "PDF_OCR_ENABLED", False))
     min_chars = max(0, int(getattr(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20)))
+    ocr_eligible_pages = 0
+    ocr_attempted_pages = 0
+    ocr_successful_pages = 0
+    ocr_failed_pages = 0
+    ocr_retried_pages = 0
     try:
-        document = fitz.open(str(path))
+        with StageTimer(logger, "pdf_open", file=path.name) as timer:
+            document = fitz.open(str(path))
+            timer.set(pages=len(document))
     except Exception as error:
         raise ExtractionError("The PDF could not be opened by the PDF parser.") from error
     try:
@@ -109,19 +120,31 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
         for index, page in enumerate(document, start=1):
             page_started = time.perf_counter()
             ocr_attempted = False
+            text_extract_started = time.perf_counter()
+            text_extract_error = False
             try:
                 page_text = page.get_text("text") or ""
             except Exception as error:
                 page_text = ""
+                text_extract_error = True
                 warnings.append(f"Text extraction failed on PDF page {index}.")
                 log_event(logger, "INGEST_PDF_PAGE_ERROR", logging.WARNING, file=path.name,
                           page=index, stage="text_extraction", error=type(error).__name__)
+            log_event(logger, "INGEST_TIMING", stage="pdf_page_text_extraction", file=path.name,
+                      page=index, seconds=time.perf_counter() - text_extract_started,
+                      status="error" if text_extract_error else "success")
             page_text = clean_and_normalize_text(page_text)
             method = "pymupdf_text"
             if ocr_enabled and len(page_text) < min_chars:
+                ocr_eligible_pages += 1
                 ocr_attempted = True
+                ocr_attempted_pages += 1
                 try:
-                    ocr_text = clean_and_normalize_text(_ocr_pdf_page(page, index))
+                    ocr_text = clean_and_normalize_text(_ocr_pdf_page(page, index, file_name=path.name))
+                    if ocr_text:
+                        ocr_successful_pages += 1
+                    else:
+                        ocr_failed_pages += 1
                     if ocr_text and len(ocr_text) > len(page_text):
                         page_text = ocr_text
                         method = "ollama_vision_ocr"
@@ -129,6 +152,7 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                     elif not page_text:
                         warnings.append(f"OCR did not produce usable text for PDF page {index}.")
                 except Exception as error:
+                    ocr_failed_pages += 1
                     warnings.append(f"OCR could not process PDF page {index}; available PDF text was retained.")
                     log_event(logger, "INGEST_PDF_PAGE_ERROR", logging.WARNING, file=path.name,
                               page=index, stage="ocr", error=type(error).__name__)
@@ -146,7 +170,14 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
         metadata["extraction_method"] = "pymupdf_text+ollama_vision_ocr" if ocr_used else "pymupdf_text"
     finally:
         document.close()
-    text = "\n\n".join(rendered_text)
+    with StageTimer(logger, "pdf_text_assembly", file=path.name,
+                    pages=len(page_records)) as timer:
+        text = "\n\n".join(rendered_text)
+        timer.set(chars=len(text))
+    log_event(logger, "INGEST_PDF_OCR_SUMMARY", file=path.name, enabled=ocr_enabled,
+              eligible=ocr_eligible_pages, attempted=ocr_attempted_pages,
+              succeeded=ocr_successful_pages, failed=ocr_failed_pages,
+              retried=ocr_retried_pages)
     if not text.strip():
         if not ocr_enabled:
             raise ExtractionError("No selectable text was found in the PDF. Scanned-PDF OCR is disabled; set PDF_OCR_ENABLED=true and configure Ollama to enable it.")
