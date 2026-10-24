@@ -134,6 +134,33 @@ class PdfTimingLoggingTests(unittest.TestCase):
         self.assertEqual(summary.kwargs["failed"], 0)
         self.assertEqual(summary.kwargs["retried"], 0)
 
+    def test_pdf_ocr_summary_counts_eligible_pages_when_ocr_is_disabled(self):
+        import tempfile
+        from pathlib import Path
+        import fitz
+        from ingestion.document_processor import extract_pdf_content
+        from config.settings import settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "short-text.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "short")
+            document.save(str(path))
+            document.close()
+
+            with patch.object(settings, "PDF_OCR_ENABLED", False), \\
+                 patch.object(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20), \\
+                 patch("ingestion.document_processor.log_event") as event:
+                extract_pdf_content(str(path))
+
+        summary = next(call for call in event.call_args_list
+                       if call.args[1] == "INGEST_PDF_OCR_SUMMARY")
+        self.assertEqual(summary.kwargs["eligible"], 1)
+        self.assertEqual(summary.kwargs["attempted"], 0)
+        self.assertEqual(summary.kwargs["succeeded"], 0)
+        self.assertEqual(summary.kwargs["failed"], 0)
+
 
 class ProviderLoggingTests(unittest.TestCase):
     def test_image_provider_timing_is_logged_without_changing_result(self):

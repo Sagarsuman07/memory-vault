@@ -135,8 +135,10 @@ def extract_pdf_content(file_path: str) -> ProcessedContent:
                       status="error" if text_extract_error else "success")
             page_text = clean_and_normalize_text(page_text)
             method = "pymupdf_text"
-            if ocr_enabled and len(page_text) < min_chars:
+            page_ocr_eligible = len(page_text) < min_chars
+            if page_ocr_eligible:
                 ocr_eligible_pages += 1
+            if ocr_enabled and page_ocr_eligible:
                 ocr_attempted = True
                 ocr_attempted_pages += 1
                 try:
