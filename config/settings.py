@@ -232,8 +232,8 @@ class Settings:
             raise ValueError("SQLITE_BUSY_TIMEOUT_MS cannot be negative")
         if self.PDF_OCR_WORKERS <= 0:
             raise ValueError("PDF_OCR_WORKERS must be greater than zero")
-        if self.PDF_OCR_WORKERS > 8:
-            raise ValueError("PDF_OCR_WORKERS cannot exceed 8")
+        if self.PDF_OCR_WORKERS > 20:
+            raise ValueError("PDF_OCR_WORKERS cannot exceed 20")
         if self.PDF_OCR_MAX_RETRIES < 0:
             raise ValueError("PDF_OCR_MAX_RETRIES cannot be negative")
         if self.PDF_OCR_RETRY_BASE_DELAY_SECONDS < 0:

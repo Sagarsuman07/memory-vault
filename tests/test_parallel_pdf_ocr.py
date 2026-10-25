@@ -1,4 +1,6 @@
+
 """Regression tests for bounded, parallel OCR in PDF extraction."""
+
 import tempfile
 import threading
 import time
@@ -29,21 +31,34 @@ class _ProviderError(Exception):
     def __init__(self, status_code: int, headers=None):
         super().__init__(f"provider status {status_code}")
         self.status_code = status_code
-        self.response = SimpleNamespace(status_code=status_code, headers=headers or {})
+        self.response = SimpleNamespace(
+            status_code=status_code,
+            headers=headers or {},
+        )
 
 
 class ParallelPdfOcrTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
+
         self.settings_patches = [
             patch.object(settings, "PDF_OCR_ENABLED", True),
             patch.object(settings, "PDF_OCR_MIN_PAGE_TEXT_CHARS", 20),
             patch.object(settings, "PDF_OCR_DPI", 100),
             patch.object(settings, "PDF_OCR_MAX_RETRIES", 2),
-            patch.object(settings, "PDF_OCR_RETRY_BASE_DELAY_SECONDS", 0.01),
-            patch.object(settings, "PDF_OCR_RETRY_MAX_DELAY_SECONDS", 0.05),
+            patch.object(
+                settings,
+                "PDF_OCR_RETRY_BASE_DELAY_SECONDS",
+                0.01,
+            ),
+            patch.object(
+                settings,
+                "PDF_OCR_RETRY_MAX_DELAY_SECONDS",
+                0.05,
+            ),
         ]
+
         for patcher in self.settings_patches:
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -51,47 +66,78 @@ class ParallelPdfOcrTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    
     def test_out_of_order_provider_completion_keeps_document_page_order(self):
         path = self.root / "out-of-order.pdf"
         _create_pdf(path, 3)
+    
         completed = []
-
+        completed_lock = threading.Lock()
+        workers_started = threading.Barrier(3, timeout=5)
+    
         def fake_ocr(_image_path, page_number, _file_name):
-            time.sleep(0.08 if page_number == 1 else 0.01)
-            completed.append(page_number)
+            workers_started.wait()
+            time.sleep(0.3 if page_number == 1 else 0.01)
+    
+            with completed_lock:
+                completed.append(page_number)
+    
             return f"Recognized content for page {page_number}"
-
-        with patch.object(settings, "PDF_OCR_WORKERS", 3), \
-             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr):
+    
+        with (
+            patch.object(settings, "PDF_OCR_WORKERS", 3),
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=fake_ocr,
+            ),
+        ):
             result = extract_pdf_content(str(path))
 
-        self.assertLess(result.text.index("Recognized content for page 1"),
-                        result.text.index("Recognized content for page 2"))
-        self.assertLess(result.text.index("Recognized content for page 2"),
-                        result.text.index("Recognized content for page 3"))
+        # OCR completion can be out of order, but final document text must
+        # preserve the original page order.
+        self.assertLess(
+            result.text.index("Recognized content for page 1"),
+            result.text.index("Recognized content for page 2"),
+        )
+        self.assertLess(
+            result.text.index("Recognized content for page 2"),
+            result.text.index("Recognized content for page 3"),
+        )
         self.assertEqual(result.metadata["page_count"], 3)
         self.assertEqual(result.metadata["pages_with_text"], 3)
+    
+        # Page 1 deliberately takes longer, so page 2 should finish first.
         self.assertGreater(completed.index(1), completed.index(2))
 
     def test_provider_concurrency_never_exceeds_configured_workers(self):
         path = self.root / "bounded.pdf"
         _create_pdf(path, 6)
+
         lock = threading.Lock()
         active = 0
         maximum_active = 0
 
         def fake_ocr(_image_path, page_number, _file_name):
             nonlocal active, maximum_active
+
             with lock:
                 active += 1
                 maximum_active = max(maximum_active, active)
+
             time.sleep(0.03)
+
             with lock:
                 active -= 1
+
             return f"Content page {page_number}"
 
-        with patch.object(settings, "PDF_OCR_WORKERS", 2), \
-             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr):
+        with (
+            patch.object(settings, "PDF_OCR_WORKERS", 2),
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=fake_ocr,
+            ),
+        ):
             result = extract_pdf_content(str(path))
 
         self.assertEqual(result.metadata["pages_with_text"], 6)
@@ -103,15 +149,30 @@ class ParallelPdfOcrTests(unittest.TestCase):
 
         def flaky_ocr(_image_path, page_number, _file_name):
             calls.append(page_number)
+
             if len(calls) == 1:
                 raise _ProviderError(429, {"Retry-After": "2"})
+
             return "Recovered OCR text"
 
-        with patch("ingestion.document_processor._ocr_pdf_page", side_effect=flaky_ocr), \
-             patch("ingestion.document_processor.time.sleep") as sleep, \
-             patch("ingestion.document_processor.random.uniform", return_value=0.0):
+        with (
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=flaky_ocr,
+            ),
+            patch("ingestion.document_processor.time.sleep") as sleep,
+            patch(
+                "ingestion.document_processor.random.uniform",
+                return_value=0.0,
+            ),
+        ):
             text, retries, error_name = _ocr_pdf_page_with_retries(
-                "unused.png", 1, "sample.pdf", 2, 0.01, 0.05
+                "unused.png",
+                1,
+                "sample.pdf",
+                2,
+                0.01,
+                0.05,
             )
 
         self.assertEqual(text, "Recovered OCR text")
@@ -127,13 +188,20 @@ class ParallelPdfOcrTests(unittest.TestCase):
 
         def fake_ocr(_image_path, page_number, _file_name):
             calls.append(page_number)
+
             if page_number == 2:
                 raise _ProviderError(400)
+
             return "Usable OCR content on page one"
 
-        with patch.object(settings, "PDF_OCR_WORKERS", 2), \
-             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr), \
-             patch("ingestion.document_processor.time.sleep") as sleep:
+        with (
+            patch.object(settings, "PDF_OCR_WORKERS", 2),
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=fake_ocr,
+            ),
+            patch("ingestion.document_processor.time.sleep") as sleep,
+        ):
             result = extract_pdf_content(str(path))
 
         self.assertIn("Usable OCR content on page one", result.text)
@@ -141,7 +209,12 @@ class ParallelPdfOcrTests(unittest.TestCase):
         self.assertEqual(calls.count(2), 1)
         sleep.assert_not_called()
         self.assertEqual(result.status, "partial")
-        self.assertTrue(any("OCR could not process PDF page 2" in warning for warning in result.warnings))
+        self.assertTrue(
+            any(
+                "OCR could not process PDF page 2" in warning
+                for warning in result.warnings
+            )
+        )
 
     def test_transient_retries_stop_at_configured_limit(self):
         path = self.root / "retry-exhaustion.pdf"
@@ -150,16 +223,24 @@ class ParallelPdfOcrTests(unittest.TestCase):
 
         def fake_ocr(_image_path, page_number, _file_name):
             calls.append(page_number)
+
             if page_number == 2:
                 raise _ProviderError(503)
+
             return "Page one OCR result"
 
-        with patch.object(settings, "PDF_OCR_WORKERS", 2), \
-             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr), \
-             patch("ingestion.document_processor.time.sleep"):
+        with (
+            patch.object(settings, "PDF_OCR_WORKERS", 2),
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=fake_ocr,
+            ),
+            patch("ingestion.document_processor.time.sleep"),
+        ):
             result = extract_pdf_content(str(path))
 
-        self.assertEqual(calls.count(2), 3)  # initial attempt plus two retries
+        # Initial attempt plus two retries.
+        self.assertEqual(calls.count(2), 3)
         self.assertIn("Page one OCR result", result.text)
         self.assertEqual(result.status, "partial")
 
@@ -167,32 +248,46 @@ class ParallelPdfOcrTests(unittest.TestCase):
         self.assertTrue(_is_retryable_ocr_error(_ProviderError(429)))
         self.assertTrue(_is_retryable_ocr_error(_ProviderError(503)))
         self.assertFalse(_is_retryable_ocr_error(_ProviderError(400)))
-        self.assertFalse(_is_retryable_ocr_error(ValueError("invalid image input")))
+        self.assertFalse(
+            _is_retryable_ocr_error(ValueError("invalid image input"))
+        )
 
     def test_worker_limit_one_provides_sequential_fallback(self):
         path = self.root / "sequential.pdf"
         _create_pdf(path, 3)
+
         active = 0
         maximum_active = 0
         lock = threading.Lock()
 
         def fake_ocr(_image_path, page_number, _file_name):
             nonlocal active, maximum_active
+
             with lock:
                 active += 1
                 maximum_active = max(maximum_active, active)
+
             time.sleep(0.01)
+
             with lock:
                 active -= 1
+
             return f"Sequential page {page_number}"
 
-        with patch.object(settings, "PDF_OCR_WORKERS", 1), \\
-             patch("ingestion.document_processor._ocr_pdf_page", side_effect=fake_ocr):
+        with (
+            patch.object(settings, "PDF_OCR_WORKERS", 1),
+            patch(
+                "ingestion.document_processor._ocr_pdf_page",
+                side_effect=fake_ocr,
+            ),
+        ):
             result = extract_pdf_content(str(path))
 
         self.assertEqual(maximum_active, 1)
-        self.assertLess(result.text.index("Sequential page 1"),
-                        result.text.index("Sequential page 2"))
+        self.assertLess(
+            result.text.index("Sequential page 1"),
+            result.text.index("Sequential page 2"),
+        )
 
 
 if __name__ == "__main__":
