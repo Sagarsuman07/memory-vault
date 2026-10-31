@@ -28,7 +28,7 @@ def get_embeddings():
                         model_kwargs={
                             "backend": "onnx",
                             "device": "cpu",
-                            "provider": "CPUExecutionProvider",
+                            "model_kwargs": {"provider": "CPUExecutionProvider"},
                         },
                         encode_kwargs={
                             "batch_size": ONNX_BATCH_SIZE,
