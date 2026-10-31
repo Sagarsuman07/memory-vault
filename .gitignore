@@ -17,3 +17,6 @@ memory_vault.db
 *.db-wal
 
 .chroma/
+
+# Runtime logs
+logs/*.log

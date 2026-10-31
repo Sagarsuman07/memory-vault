@@ -202,6 +202,16 @@ class Settings:
     PDF_OCR_ENABLED = os.getenv("PDF_OCR_ENABLED", "false").lower() == "true"
     PDF_OCR_DPI = int(os.getenv("PDF_OCR_DPI", "144"))
     PDF_OCR_MIN_PAGE_TEXT_CHARS = int(os.getenv("PDF_OCR_MIN_PAGE_TEXT_CHARS", "20"))
+    # OCR page rendering stays serial; only independent vision calls are parallel.
+    # Set PDF_OCR_WORKERS=1 for the sequential OCR fallback.
+    PDF_OCR_WORKERS = int(os.getenv("PDF_OCR_WORKERS", "3"))
+    PDF_OCR_MAX_RETRIES = int(os.getenv("PDF_OCR_MAX_RETRIES", "2"))
+    PDF_OCR_RETRY_BASE_DELAY_SECONDS = float(
+        os.getenv("PDF_OCR_RETRY_BASE_DELAY_SECONDS", "1")
+    )
+    PDF_OCR_RETRY_MAX_DELAY_SECONDS = float(
+        os.getenv("PDF_OCR_RETRY_MAX_DELAY_SECONDS", "8")
+    )
 
     def validate_knowledge_base_settings(self):
         if self.CHUNK_SIZE <= 0:
@@ -220,6 +230,16 @@ class Settings:
             raise ValueError("EMBEDDING_CONCURRENCY must be greater than zero")
         if self.SQLITE_BUSY_TIMEOUT_MS < 0:
             raise ValueError("SQLITE_BUSY_TIMEOUT_MS cannot be negative")
+        if self.PDF_OCR_WORKERS <= 0:
+            raise ValueError("PDF_OCR_WORKERS must be greater than zero")
+        if self.PDF_OCR_WORKERS > 20:
+            raise ValueError("PDF_OCR_WORKERS cannot exceed 20")
+        if self.PDF_OCR_MAX_RETRIES < 0:
+            raise ValueError("PDF_OCR_MAX_RETRIES cannot be negative")
+        if self.PDF_OCR_RETRY_BASE_DELAY_SECONDS < 0:
+            raise ValueError("PDF_OCR_RETRY_BASE_DELAY_SECONDS cannot be negative")
+        if self.PDF_OCR_RETRY_MAX_DELAY_SECONDS < self.PDF_OCR_RETRY_BASE_DELAY_SECONDS:
+            raise ValueError("PDF_OCR_RETRY_MAX_DELAY_SECONDS must be >= PDF_OCR_RETRY_BASE_DELAY_SECONDS")
 
 
 settings = Settings()
