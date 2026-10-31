@@ -34,4 +34,4 @@ langchain-core
 langchain-text-splitters
 langchain-chroma
 langchain-huggingface
-sentence-transformers
+sentence-transformers[onnx]
