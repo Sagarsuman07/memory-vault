@@ -1,28 +1,22 @@
-
-
 Pillow
 reportlab
 
 langsmith
-
 langgraph-checkpoint-sqlite
-
 langchain-tavily
-
 langchain-groq
-
 
 python-dotenv
 langchain
 langchain-core
+langchain-text-splitters
 langgraph
 chromadb
 sqlalchemy
 pydantic
 
-
 streamlit==1.41.0
-python-dotenv
+packaging>=20,<25
 
 ollama
 groq
@@ -30,9 +24,8 @@ groq
 PyMuPDF
 python-docx
 
-langchain-core
-langchain-text-splitters
 langchain-chroma
 langchain-huggingface
 sentence-transformers[onnx]==5.7.0
-transformers>=5.0.0,<6.0.0
+optimum-onnx==0.1.0
+transformers>=4.41.0,<4.58.0
