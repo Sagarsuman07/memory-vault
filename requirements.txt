@@ -34,4 +34,5 @@ langchain-core
 langchain-text-splitters
 langchain-chroma
 langchain-huggingface
-sentence-transformers[onnx]
+sentence-transformers[onnx]==5.7.0
+transformers>=5.0.0,<6.0.0
