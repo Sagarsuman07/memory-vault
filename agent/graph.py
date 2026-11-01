@@ -40,6 +40,7 @@ from agent.limits import (
 from langgraph.errors import GraphRecursionError
 
 from config.settings import settings
+from database.database import _connection_failure
 
 from database.repositories import (
     get_memory as get_memory_record,
@@ -78,19 +79,21 @@ def initialize_checkpointer():
             kwargs={
                 "autocommit": True,
                 "connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS,
+                "sslmode": "require",
                 "application_name": "memory-vault-checkpoints",
             },
+            reconnect_timeout=settings.DB_CONNECT_TIMEOUT_SECONDS,
             open=False,
         )
         try:
-            pool.open(wait=True)
+            pool.open(wait=True, timeout=settings.DB_CONNECT_TIMEOUT_SECONDS + 2)
             checkpointer = PostgresSaver(pool)
             checkpointer.setup()
-        except Exception:
+        except Exception as error:
             pool.close()
-            raise RuntimeError(
-                "Unable to initialize PostgreSQL LangGraph checkpoint storage."
-            ) from None
+            raise _connection_failure(
+                "Unable to initialize PostgreSQL LangGraph checkpoint storage.", error
+            ) from error
         _checkpoint_pool = pool
         _checkpointer = checkpointer
     return _checkpointer

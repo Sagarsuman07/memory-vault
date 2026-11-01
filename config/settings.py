@@ -6,19 +6,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _streamlit_secret(name: str):
-    """Read a Streamlit Community Cloud secret without requiring Streamlit in tests."""
-    try:
-        import streamlit as st
-        return st.secrets.get(name)
-    except Exception:
-        return None
-
-
-def _setting(name: str, default=None):
-    return os.getenv(name) or _streamlit_secret(name) or default
-
-
 class Settings:
 
     # ============================================================
@@ -35,18 +22,23 @@ class Settings:
         "demo_user",
     )
 
-    DATABASE_URL = _setting("DATABASE_URL")
-
-    # A small process-wide pool is sufficient for the single Streamlit worker.
-    DB_POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
-    DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "3"))
-    DB_POOL_TIMEOUT_SECONDS = float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "10"))
-    DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "5"))
-    DB_STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "15000"))
+    DATABASE_PATH = os.getenv(
+        "DATABASE_PATH",
+        "memory_vault.db",
+    )
 
     UPLOAD_DIR = os.getenv(
         "UPLOAD_DIR",
         "uploads",
+    )
+
+    # ============================================================
+    # LangGraph Checkpoint Database
+    # ============================================================
+
+    CHECKPOINT_DATABASE_PATH = os.getenv(
+        "CHECKPOINT_DATABASE_PATH",
+        "memory_vault_checkpoints.sqlite",
     )
 
     # ============================================================
@@ -133,6 +125,9 @@ class Settings:
     # Keep local embedding inference from running in several threads at once.
     # This is conservative for the current HuggingFaceEmbeddings implementation.
     EMBEDDING_CONCURRENCY = int(os.getenv("EMBEDDING_CONCURRENCY", "1"))
+
+    # SQLite waits briefly for another writer instead of failing immediately.
+    SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
 
     # ============================================================
     # Safety
@@ -252,16 +247,12 @@ class Settings:
             raise ValueError("INGESTION_WORKER_CONCURRENCY must be greater than zero")
         if self.EMBEDDING_CONCURRENCY <= 0:
             raise ValueError("EMBEDDING_CONCURRENCY must be greater than zero")
-        if self.DB_POOL_MIN_SIZE < 1 or self.DB_POOL_MAX_SIZE < self.DB_POOL_MIN_SIZE:
-            raise ValueError("DB_POOL_MAX_SIZE must be >= DB_POOL_MIN_SIZE >= 1")
-        if self.DB_POOL_TIMEOUT_SECONDS <= 0 or self.DB_CONNECT_TIMEOUT_SECONDS <= 0:
-            raise ValueError("Database connection timeouts must be positive")
-        if self.DB_STATEMENT_TIMEOUT_MS <= 0:
-            raise ValueError("DB_STATEMENT_TIMEOUT_MS must be positive")
         if self.EMBEDDING_DIMENSION <= 0:
             raise ValueError("EMBEDDING_DIMENSION must be greater than zero")
         if self.RETRIEVAL_MODE not in {"hybrid", "dense", "bm25"}:
             raise ValueError("RETRIEVAL_MODE must be one of: hybrid, dense, bm25")
+        if self.SQLITE_BUSY_TIMEOUT_MS < 0:
+            raise ValueError("SQLITE_BUSY_TIMEOUT_MS cannot be negative")
         if self.PDF_OCR_WORKERS <= 0:
             raise ValueError("PDF_OCR_WORKERS must be greater than zero")
         if self.PDF_OCR_WORKERS > 20:

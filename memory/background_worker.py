@@ -17,9 +17,8 @@ import time
 
 from config.logging_config import StageTimer, get_logger, log_context, log_event
 from config.settings import settings
+from database.database import get_connection
 from database.repositories import (
-    get_memory,
-    update_memory_extracted_text,
     get_preparation_job,
     transition_preparation_job,
     update_preparation_job_progress,
@@ -45,12 +44,30 @@ def _worker_count() -> int:
 
 
 def _memory_row(memory_id: str, user_id: str):
-    return get_memory(memory_id, user_id)
+    connection = get_connection()
+    try:
+        return connection.execute(
+            "SELECT * FROM memories WHERE id = ? AND user_id = ?", (memory_id, user_id)
+        ).fetchone()
+    finally:
+        connection.close()
 
 
 def _save_extracted_text(memory_id: str, user_id: str, text: str) -> None:
-    if not update_memory_extracted_text(memory_id, user_id, text):
-        raise LookupError("Memory record was not found while saving extracted content.")
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            "UPDATE memories SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (text, memory_id, user_id),
+        )
+        if cursor.rowcount != 1:
+            raise LookupError("Memory record was not found while saving extracted content.")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def _classify_error(stage: PipelineStage) -> tuple[PreparationErrorCategory, str]:
@@ -341,6 +358,14 @@ def _recover_interrupted_jobs_on_startup() -> None:
         rows = connection.execute(
             "SELECT id, user_id, attempt_count FROM preparation_jobs WHERE status = 'running'"
         ).fetchall()
+        # Phase 7's Stop control has been retired. Clear only its obsolete request
+        # records if that optional table exists; do not delete memories or vectors.
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_job_cancellations'"
+        ).fetchone()
+        if table:
+            connection.execute("DELETE FROM preparation_job_cancellations")
+            connection.commit()
     finally:
         connection.close()
 

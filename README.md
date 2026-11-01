@@ -27,7 +27,7 @@ Memory Vault uses:
 - Streamlit
 - LangChain
 - LangGraph
-- SQLite
+- Supabase PostgreSQL (application data and LangGraph checkpoints)
 - Qdrant (hybrid dense + BM25 search with RRF)
 - LLM
 - Embeddings
@@ -46,3 +46,26 @@ mvenv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
 streamlit run app.py
+
+## Supabase PostgreSQL configuration
+
+Set `DATABASE_URL` to the connection string copied from **Supabase Dashboard → Connect**.
+
+For a local development machine or hosting network that cannot reach IPv6, use
+**Shared Pooler → Session mode** (port `5432`). Supabase direct database endpoints
+are IPv6-only unless the project has the IPv4 add-on. Copy the exact pooler host,
+username, and password from the dashboard; do not construct the pooler hostname
+manually. Keep the connection string in a local `.env` file or Streamlit secrets,
+not in source control. The application requires TLS for PostgreSQL connections.
+
+Example shape only (replace every placeholder with values from the dashboard):
+
+```dotenv
+DATABASE_URL=postgresql://postgres.<PROJECT_REF>:<PASSWORD>@<POOLER_HOST>:5432/postgres
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE=3
+DB_CONNECT_TIMEOUT_SECONDS=8
+DB_POOL_TIMEOUT_SECONDS=10
+```
+
+Never commit a real database password or connection string.

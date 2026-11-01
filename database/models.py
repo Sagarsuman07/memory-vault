@@ -16,8 +16,6 @@ class Memory:
     extracted_text: Optional[str]
     created_at: str
     updated_at: str
-    original_file_key: Optional[str] = None
-    extracted_text_key: Optional[str] = None
 
 
 @dataclass(frozen=True)

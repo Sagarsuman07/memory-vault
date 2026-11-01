@@ -2,7 +2,6 @@ import streamlit as st
 
 from agent.graph import (
     create_thread_id as create_chat_thread_id,
-    initialize_checkpointer,
 )
 
 from config.settings import settings
@@ -27,7 +26,6 @@ st.set_page_config(
 )
 
 initialize_database()
-initialize_checkpointer()
 start_background_worker()
 
 USER_ID = settings.DEMO_USER_ID

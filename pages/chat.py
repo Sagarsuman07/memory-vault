@@ -9,7 +9,7 @@ from agent.graph import (
     get_conversation_history,
     get_thread_state,
     run_langgraph_agent,
-    delete_conversation_thread,
+    _checkpointer,
 )
 
 
@@ -1411,9 +1411,8 @@ def delete_conversation(
             "You are not allowed to delete this conversation."
         )
 
-    delete_conversation_thread(
-        user_id=USER_ID,
-        thread_id=thread_id,
+    _checkpointer.delete_thread(
+        thread_id
     )
 
     invalidate_chat_history()

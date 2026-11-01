@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from threading import RLock
 
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -69,6 +70,45 @@ class _PooledConnection:
         return getattr(self._connection, name)
 
 
+
+def _connection_target() -> tuple[str, str]:
+    """Return a safe host/port summary without exposing database credentials."""
+    try:
+        info = conninfo_to_dict(settings.DATABASE_URL or "")
+        return info.get("host", "<unknown host>"), str(info.get("port", "5432"))
+    except Exception:
+        return "<unparseable DATABASE_URL>", "<unknown port>"
+
+
+def _connection_failure(context: str, error: Exception) -> RuntimeError:
+    """Build an actionable, credential-safe PostgreSQL connection error."""
+    host, port = _connection_target()
+    message = (
+        f"{context} Could not reach PostgreSQL host '{host}' on port {port}. "
+        f"Underlying error: {type(error).__name__}: {error}."
+    )
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        message += (
+            " This looks like a Supabase direct database endpoint, which is IPv6-only "
+            "unless the project has the IPv4 add-on. If your network is IPv4-only, "
+            "copy the Shared Pooler → Session mode connection string from Supabase "
+            "Dashboard → Connect (port 5432) and use it as DATABASE_URL."
+        )
+    elif ".pooler.supabase.com" in host and port == "6543":
+        message += (
+            " DATABASE_URL is using the transaction pooler. This application keeps "
+            "long-lived application and LangGraph connections; prefer Supabase "
+            "Shared Pooler → Session mode (port 5432)."
+        )
+    else:
+        message += (
+            " Verify the host and port in Supabase Dashboard → Connect, that the "
+            "project is active, and that your network/firewall allows outbound "
+            "PostgreSQL TCP connections."
+        )
+    return RuntimeError(message)
+
+
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is not None:
@@ -88,16 +128,18 @@ def _get_pool() -> ConnectionPool:
                 kwargs={
                     "row_factory": dict_row,
                     "connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS,
+                    "sslmode": "require",
                     "options": f"-c statement_timeout={settings.DB_STATEMENT_TIMEOUT_MS}",
                     "application_name": "memory-vault",
                 },
+                reconnect_timeout=settings.DB_CONNECT_TIMEOUT_SECONDS,
                 open=False,
             )
             try:
-                pool.open(wait=True)
-            except Exception:
+                pool.open(wait=True, timeout=settings.DB_CONNECT_TIMEOUT_SECONDS + 2)
+            except Exception as error:
                 pool.close()
-                raise RuntimeError("Unable to connect to Supabase PostgreSQL.") from None
+                raise _connection_failure("Unable to connect to Supabase PostgreSQL.", error) from error
             _pool = pool
     return _pool
 
