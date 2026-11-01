@@ -196,6 +196,8 @@ file_key = memory.get("original_file_key") or memory.get("file_path")
 memory_type = memory["memory_type"]
 file_url = generate_signed_url(file_key) if file_key else None
 download_url = generate_signed_url(file_key, download_filename=memory["file_name"]) if file_key else None
+safe_file_url = html.escape(file_url, quote=True) if file_url else None
+safe_download_url = html.escape(download_url, quote=True) if download_url else None
 safe_file_name = html.escape(memory["file_name"])
 
 with content_col:
@@ -216,8 +218,8 @@ with content_col:
             if mime_type == "application/pdf":
                 st.markdown(
                     f"""
-                    <a href="{download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
-                        <iframe src="{file_url}"
+                    <a href="{safe_download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
+                        <iframe src="{safe_file_url}"
                             style="width:100%; height:380px; border:none; border-radius:8px;">
                         </iframe>
                         <div style="text-align:center; margin-top:6px; font-size:0.85rem; opacity:0.75;">
@@ -230,7 +232,7 @@ with content_col:
             else:
                 st.markdown(
                     f"""
-                    <a href="{download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
+                    <a href="{safe_download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
                         <div class="doc-preview-box">
                             <div style="font-size:2.5rem;">📄</div>
                             <div style="margin-top:8px;">{safe_file_name}</div>
