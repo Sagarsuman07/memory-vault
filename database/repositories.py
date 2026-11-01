@@ -745,3 +745,22 @@ def delete_chat_thread(thread_id: str, user_id: str) -> bool:
         raise
     finally:
         connection.close()
+
+
+
+def update_memory_extracted_text(memory_id: str, user_id: str, text: str) -> bool:
+    """Persist extracted text through the repository compatibility column."""
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            "UPDATE memories SET legacy_extracted_text = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND user_id = ?",
+            (text, memory_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount == 1
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
