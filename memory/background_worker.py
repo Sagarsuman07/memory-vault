@@ -1,7 +1,7 @@
 """Concurrent, persistent background preparation worker for Memory Vault.
 
 The dispatcher runs one thread and submits individual memory jobs to a bounded
-ThreadPoolExecutor. SQLite's atomic job transition remains the source of truth
+ThreadPoolExecutor. PostgreSQL job records remain the source of truth
 for claiming work. The worker recovers RUNNING jobs left by a previous app
 process once at startup; it does not periodically steal long-running jobs.
 """
@@ -17,8 +17,9 @@ import time
 
 from config.logging_config import StageTimer, get_logger, log_context, log_event
 from config.settings import settings
-from database.database import get_connection
 from database.repositories import (
+    get_memory,
+    update_memory_extracted_text,
     get_preparation_job,
     transition_preparation_job,
     update_preparation_job_progress,
@@ -44,30 +45,12 @@ def _worker_count() -> int:
 
 
 def _memory_row(memory_id: str, user_id: str):
-    connection = get_connection()
-    try:
-        return connection.execute(
-            "SELECT * FROM memories WHERE id = ? AND user_id = ?", (memory_id, user_id)
-        ).fetchone()
-    finally:
-        connection.close()
+    return get_memory(memory_id, user_id)
 
 
 def _save_extracted_text(memory_id: str, user_id: str, text: str) -> None:
-    connection = get_connection()
-    try:
-        cursor = connection.execute(
-            "UPDATE memories SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
-            (text, memory_id, user_id),
-        )
-        if cursor.rowcount != 1:
-            raise LookupError("Memory record was not found while saving extracted content.")
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    if not update_memory_extracted_text(memory_id, user_id, text):
+        raise LookupError("Memory record was not found while saving extracted content.")
 
 
 def _classify_error(stage: PipelineStage) -> tuple[PreparationErrorCategory, str]:
