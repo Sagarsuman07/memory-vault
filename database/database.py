@@ -134,8 +134,8 @@ def initialize_database():
                     legacy_file_path TEXT,
                     legacy_extracted_text TEXT,
                     summary TEXT,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )""",
                 """CREATE TABLE IF NOT EXISTS preparation_jobs (
                     id TEXT PRIMARY KEY,
