@@ -375,15 +375,12 @@ def _recover_interrupted_jobs_on_startup() -> None:
 
 
 def _pending_jobs() -> list[tuple[str, str]]:
-    connection = get_connection()
-    try:
-        rows = connection.execute(
-            "SELECT id, user_id FROM preparation_jobs "
-            "WHERE status IN ('queued', 'retrying') ORDER BY created_at, id"
-        ).fetchall()
-        return [(row["id"], row["user_id"]) for row in rows]
-    finally:
-        connection.close()
+    """Fetch queued jobs through the PostgreSQL repository layer."""
+    jobs = list_preparation_jobs(
+        settings.DEMO_USER_ID,
+        statuses=(JobStatus.QUEUED, JobStatus.RETRYING),
+    )
+    return [(job.id, job.user_id) for job in jobs]
 
 
 def run_worker_forever() -> None:
