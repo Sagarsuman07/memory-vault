@@ -93,6 +93,25 @@ class Settings:
         "sentence-transformers/all-MiniLM-L6-v2",
     )
 
+    # ============================================================
+    # Qdrant (vector database)
+    # ============================================================
+
+    # Set QDRANT_URL (+ QDRANT_API_KEY for Qdrant Cloud) to use a Qdrant
+    # server. If QDRANT_URL is empty, an embedded local database is stored
+    # in QDRANT_PATH (development only; single process).
+    QDRANT_URL = os.getenv("QDRANT_URL") or None
+    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
+    QDRANT_PATH = os.getenv("QDRANT_PATH", ".qdrant")
+    QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "memory_vault")
+
+    # Must match EMBEDDING_MODEL (all-MiniLM-L6-v2 produces 384 dimensions).
+    EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "384"))
+
+    # "hybrid" (dense + BM25 fused with RRF), "dense" or "bm25".
+    # "dense" / "bm25" exist mainly to compare strategies in evaluation.
+    RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "hybrid").lower()
+
     # Indexing and worker settings are configuration-only in Phase 1.
     EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
     INGESTION_MAX_ATTEMPTS = int(os.getenv("INGESTION_MAX_ATTEMPTS", "3"))
@@ -228,6 +247,10 @@ class Settings:
             raise ValueError("INGESTION_WORKER_CONCURRENCY must be greater than zero")
         if self.EMBEDDING_CONCURRENCY <= 0:
             raise ValueError("EMBEDDING_CONCURRENCY must be greater than zero")
+        if self.EMBEDDING_DIMENSION <= 0:
+            raise ValueError("EMBEDDING_DIMENSION must be greater than zero")
+        if self.RETRIEVAL_MODE not in {"hybrid", "dense", "bm25"}:
+            raise ValueError("RETRIEVAL_MODE must be one of: hybrid, dense, bm25")
         if self.SQLITE_BUSY_TIMEOUT_MS < 0:
             raise ValueError("SQLITE_BUSY_TIMEOUT_MS cannot be negative")
         if self.PDF_OCR_WORKERS <= 0:

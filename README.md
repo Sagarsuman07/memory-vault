@@ -28,7 +28,7 @@ Memory Vault uses:
 - LangChain
 - LangGraph
 - SQLite
-- Chroma
+- Qdrant (hybrid dense + BM25 search with RRF)
 - LLM
 - Embeddings
 - Speech-to-text

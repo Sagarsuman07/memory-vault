@@ -1,51 +1,181 @@
-"""Safe, batched, verifiable Chroma indexing for Memory Vault."""
+"""Qdrant vector store for Memory Vault (dense vectors + BM25 sparse vectors).
+
+Each chunk is one Qdrant point with two named vectors:
+
+* ``dense`` - the existing all-MiniLM-L6-v2 embedding (cosine similarity).
+* ``bm25``  - a sparse term-weight vector. Qdrant applies the IDF part of BM25
+  server-side (``Modifier.IDF``); the term-frequency part is computed here.
+
+Search (rag/retriever.py) combines both with Qdrant's native RRF fusion.
+
+Public API kept from the Chroma version, so callers are unchanged:
+``index_memory``, ``verify_memory_index``, ``clone_memory_index``,
+``VectorReuseError``. New: ``delete_memory_index`` and ``get_client``.
+"""
 from __future__ import annotations
+
 import logging
 import math
-from numbers import Real
-from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+import re
 import threading
 import time
-from langchain_chroma import Chroma
+import uuid
+import zlib
+from collections import Counter
+from numbers import Real
+from typing import Any, Callable, Optional, Sequence
+
 from langchain_core.documents import Document
+from qdrant_client import QdrantClient, models
+
+from config.logging_config import StageTimer, get_logger, log_event, timed_lock
 from config.settings import settings
 from rag.embeddings import get_embeddings
-from config.logging_config import StageTimer, get_logger, log_event, timed_lock
 
 logger = get_logger(__name__)
 
-CHROMA_DIR = Path(".chroma")
-COLLECTION_NAME = "memory_vault"
+COLLECTION_NAME = settings.QDRANT_COLLECTION
+DENSE_VECTOR = "dense"
+SPARSE_VECTOR = "bm25"
+TEXT_KEY = "chunk_text"          # payload key holding the chunk text
+UPSERT_BATCH_SIZE = 64
 
-# One lock protects the shared Chroma collection across worker threads. Keep it
-# process-wide; a lock created per job would not coordinate concurrent writes.
-_CHROMA_LOCK = threading.RLock()
-# Building a Chroma client concurrently on first use can crash inside Chroma
-# (e.g. KeyError / "Could not connect to tenant"). Serialize construction only.
+# BM25 term-frequency parameters. AVG_DOC_LEN is the typical number of terms in
+# one chunk (CHUNK_SIZE is ~1000 characters).
+BM25_K1 = 1.2
+BM25_B = 0.75
+BM25_AVG_DOC_LEN = 170.0
+
+# One process-wide lock for every Qdrant call. It is required by the embedded
+# local mode (not thread-safe) and harmless for a Qdrant server.
+QDRANT_LOCK = threading.RLock()
 _CLIENT_LOCK = threading.Lock()
+_CLIENT: QdrantClient | None = None
 _EMBEDDING_LOCK = threading.Semaphore(
     max(1, int(getattr(settings, "EMBEDDING_CONCURRENCY", 1)))
 )
 
 
-def get_vector_store():
-    """Return the existing persistent Chroma vector store."""
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    with timed_lock(logger, _CLIENT_LOCK, "chroma_client", "construct_client"):
-        started = time.perf_counter()
-        try:
-            store = Chroma(collection_name=COLLECTION_NAME,
-                           embedding_function=get_embeddings(),
-                           persist_directory=str(CHROMA_DIR))
-        except Exception as error:
-            log_event(logger, "INGEST_COMPONENT_INITIALIZATION", logging.WARNING,
-                      component="chroma_client", status="error", error=type(error).__name__,
-                      seconds=time.perf_counter() - started)
-            raise
-        log_event(logger, "INGEST_COMPONENT_INITIALIZATION", component="chroma_client",
-                  status="success", seconds=time.perf_counter() - started)
-        return store
+# ============================================================
+# Client + collection
+# ============================================================
+
+def _ensure_collection(client: QdrantClient) -> None:
+    """Create the collection if missing; refuse an incompatible existing one."""
+    size = settings.EMBEDDING_DIMENSION
+    if client.collection_exists(COLLECTION_NAME):
+        params = client.get_collection(COLLECTION_NAME).config.params
+        dense = params.vectors.get(DENSE_VECTOR) if isinstance(params.vectors, dict) else None
+        if dense is None or dense.size != size:
+            raise RuntimeError(
+                f"Qdrant collection '{COLLECTION_NAME}' does not have a "
+                f"'{DENSE_VECTOR}' vector of size {size}. Use another QDRANT_COLLECTION "
+                "or delete the existing collection."
+            )
+        if SPARSE_VECTOR not in (params.sparse_vectors or {}):
+            raise RuntimeError(
+                f"Qdrant collection '{COLLECTION_NAME}' has no '{SPARSE_VECTOR}' sparse vector."
+            )
+        return
+
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config={DENSE_VECTOR: models.VectorParams(size=size, distance=models.Distance.COSINE)},
+        sparse_vectors_config={SPARSE_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)},
+    )
+    # Payload indexes speed up the user/memory filters on a server. The embedded
+    # local mode does not use them.
+    if settings.QDRANT_URL:
+        for field in ("user_id", "memory_id"):
+            client.create_payload_index(COLLECTION_NAME, field_name=field,
+                                        field_schema=models.PayloadSchemaType.KEYWORD)
+
+
+def get_client() -> QdrantClient:
+    """Return the shared Qdrant client (created once, collection ensured)."""
+    global _CLIENT
+    if _CLIENT is None:
+        with timed_lock(logger, _CLIENT_LOCK, "qdrant_client", "construct_client"):
+            if _CLIENT is None:
+                started = time.perf_counter()
+                try:
+                    if settings.QDRANT_URL:
+                        client = QdrantClient(url=settings.QDRANT_URL,
+                                              api_key=settings.QDRANT_API_KEY, timeout=30)
+                    else:
+                        client = QdrantClient(path=settings.QDRANT_PATH)
+                    with QDRANT_LOCK:
+                        _ensure_collection(client)
+                except Exception as error:
+                    log_event(logger, "INGEST_COMPONENT_INITIALIZATION", logging.WARNING,
+                              component="qdrant_client", status="error",
+                              error=type(error).__name__, seconds=time.perf_counter() - started)
+                    raise
+                _CLIENT = client
+                log_event(logger, "INGEST_COMPONENT_INITIALIZATION", component="qdrant_client",
+                          status="success", seconds=time.perf_counter() - started)
+    return _CLIENT
+
+
+# ============================================================
+# BM25 sparse vectors
+# ============================================================
+
+_TOKEN = re.compile(r"\w+", re.UNICODE)
+_STOPWORDS = frozenset(
+    "a an and are as at be by for from has have how i in is it its me my of on or "
+    "that the this to was were what when where which who why with you your".split()
+)
+
+
+def query_terms(text: str) -> list[str]:
+    """Lower-case content words (stop words removed); used for BM25 and grounding."""
+    return [t for t in _TOKEN.findall(text.lower()) if t not in _STOPWORDS]
+
+
+def _term_id(term: str) -> int:
+    # crc32 is stable across runs (Python's hash() is randomised) and fits Qdrant's u32 index.
+    return zlib.crc32(term.encode("utf-8"))
+
+
+def sparse_document(text: str) -> models.SparseVector:
+    """BM25 term-frequency weights for a chunk (IDF is applied by Qdrant)."""
+    terms = query_terms(text)
+    counts = Counter(_term_id(t) for t in terms)
+    length_norm = BM25_K1 * (1 - BM25_B + BM25_B * len(terms) / BM25_AVG_DOC_LEN)
+    indices = sorted(counts)
+    return models.SparseVector(
+        indices=indices,
+        values=[counts[i] * (BM25_K1 + 1) / (counts[i] + length_norm) for i in indices],
+    )
+
+
+def sparse_query(text: str) -> models.SparseVector | None:
+    """Query vector (weight 1 per distinct term), or None if no content words."""
+    indices = sorted({_term_id(t) for t in query_terms(text)})
+    if not indices:
+        return None
+    return models.SparseVector(indices=indices, values=[1.0] * len(indices))
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def memory_filter(memory_id: str, user_id: str | None = None) -> models.Filter:
+    must = [models.FieldCondition(key="memory_id", match=models.MatchValue(value=memory_id))]
+    if user_id is not None:
+        must.append(models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)))
+    return models.Filter(must=must)
+
+
+def _point_id(memory_id: str, chunk_index: int) -> str:
+    """Deterministic UUID (Qdrant IDs must be UUIDs/ints), so re-indexing overwrites."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{memory_id}_chunk_{chunk_index}"))
+
+
+def _chunk_id(memory_id: str, chunk_index: int) -> str:
+    return f"{memory_id}_chunk_{chunk_index}"
 
 
 def _as_list(value: Any) -> list:
@@ -54,6 +184,15 @@ def _as_list(value: Any) -> list:
     if hasattr(value, "tolist"):
         value = value.tolist()
     return list(value)
+
+
+def _safe_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep scalar metadata only."""
+    if not metadata:
+        return {}
+    return {k: v for k, v in metadata.items()
+            if isinstance(k, str) and k.strip() and v is not None
+            and isinstance(v, (str, bool, int, float))}
 
 
 def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
@@ -73,7 +212,7 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
         # can make progress between batches of a large memory.
         try:
             with timed_lock(logger, _EMBEDDING_LOCK, "embedding", "embed_batch",
-                             batch=batch_number, items=len(batch)):
+                            batch=batch_number, items=len(batch)):
                 raw = embedder.embed_documents(batch)
         except Exception as error:
             log_event(logger, "INGEST_EMBEDDING_BATCH_ERROR", logging.WARNING,
@@ -100,84 +239,85 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
     return result
 
 
-def _safe_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    """Keep Chroma-compatible scalar metadata only."""
-    if not metadata:
-        return {}
-    return {k: v for k, v in metadata.items()
-            if isinstance(k, str) and k.strip() and v is not None
-            and isinstance(v, (str, bool, int, float))}
+def _scroll(client: QdrantClient, flt: models.Filter, *, with_payload: bool = False,
+            with_vectors: bool | list[str] = False) -> list:
+    """Return every point matching ``flt``."""
+    points: list = []
+    offset = None
+    while True:
+        batch, offset = client.scroll(COLLECTION_NAME, scroll_filter=flt, limit=256,
+                                      offset=offset, with_payload=with_payload,
+                                      with_vectors=with_vectors)
+        points.extend(batch)
+        if offset is None:
+            return points
 
 
-def _snapshot(collection: Any, memory_id: str) -> dict[str, list]:
-    """Snapshot current records so a failed replacement can roll back."""
-    data = collection.get(where={"memory_id": memory_id},
-                          include=["embeddings", "documents", "metadatas"])
-    ids = list(data.get("ids") or [])
-    if not ids:
-        return {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
-    embeddings = _as_list(data.get("embeddings"))
-    documents = list(data.get("documents") or [])
-    metadatas = list(data.get("metadatas") or [])
-    if not (len(ids) == len(embeddings) == len(documents) == len(metadatas)):
-        raise RuntimeError("Cannot safely replace memory: existing Chroma records could not be snapshotted completely.")
-    if any(not _as_list(v) for v in embeddings):
-        raise RuntimeError("Cannot safely replace memory: an existing vector is missing.")
-    return {"ids": ids,
-            "embeddings": [[float(x) for x in _as_list(v)] for v in embeddings],
-            "documents": documents, "metadatas": [dict(m or {}) for m in metadatas]}
+def _make_point(memory_id: str, user_id: str, memory_type: str, index: int, text: str,
+                metadata: dict[str, Any], dense: list[float]) -> models.PointStruct:
+    payload = dict(metadata)
+    # Identity fields are set last so chunk metadata can never override them.
+    payload.update({"memory_id": memory_id, "user_id": user_id, "memory_type": memory_type,
+                    "chunk_index": index, "chunk_id": _chunk_id(memory_id, index),
+                    TEXT_KEY: text})
+    return models.PointStruct(id=_point_id(memory_id, index), payload=payload,
+                              vector={DENSE_VECTOR: dense, SPARSE_VECTOR: sparse_document(text)})
 
 
-def _collection_dimension(collection: Any) -> int | None:
-    data = collection.get(limit=1, include=["embeddings"])
-    vectors = _as_list(data.get("embeddings"))
-    return len(_as_list(vectors[0])) if vectors and _as_list(vectors[0]) else None
+def _replace_memory_points(client: QdrantClient, memory_id: str,
+                           points: list[models.PointStruct]) -> None:
+    """Write the memory's points, drop stale ones, verify the count.
+
+    Point IDs are deterministic, so a retry/re-index overwrites in place. If the
+    write fails, points created by this attempt are removed again.
+    """
+    ids = [p.id for p in points]
+    started = time.perf_counter()
+    with timed_lock(logger, QDRANT_LOCK, "qdrant", "replace_memory_index",
+                    memory=memory_id, chunks=len(ids)):
+        previous = {p.id for p in _scroll(client, memory_filter(memory_id))}
+        try:
+            for start in range(0, len(points), UPSERT_BATCH_SIZE):
+                client.upsert(COLLECTION_NAME, points=points[start:start + UPSERT_BATCH_SIZE],
+                              wait=True)
+            stale = list(previous - set(ids))
+            if stale:
+                client.delete(COLLECTION_NAME, points_selector=models.PointIdsList(points=stale),
+                              wait=True)
+            actual = client.count(COLLECTION_NAME, count_filter=memory_filter(memory_id),
+                                  exact=True).count
+            if actual != len(ids):
+                raise RuntimeError(
+                    f"Qdrant verification failed: expected {len(ids)} chunks, found {actual}.")
+            log_event(logger, "INGEST_TIMING", stage="qdrant_indexing", memory=memory_id,
+                      seconds=time.perf_counter() - started, chunks=len(ids),
+                      stale_records=len(stale))
+        except Exception as error:
+            log_event(logger, "INGEST_QDRANT_INDEX_ERROR", logging.ERROR, memory=memory_id,
+                      error=type(error).__name__, chunks=len(ids),
+                      seconds=time.perf_counter() - started)
+            created = [i for i in ids if i not in previous]
+            try:
+                if created:
+                    client.delete(COLLECTION_NAME,
+                                  points_selector=models.PointIdsList(points=created), wait=True)
+            except Exception as cleanup_error:
+                log_event(logger, "INGEST_QDRANT_CLEANUP_ERROR", logging.CRITICAL,
+                          memory=memory_id, error=type(cleanup_error).__name__)
+                raise RuntimeError(
+                    "Indexing failed and cleanup also failed. Inspect Qdrant before retrying. "
+                    f"Indexing error: {error}; cleanup error: {cleanup_error}") from error
+            raise
 
 
-def _verify_records(collection: Any, memory_id: str, ids: list[str],
-                    texts: list[str], metadatas: list[dict], dimension: int) -> None:
-    data = collection.get(ids=ids, include=["embeddings", "documents", "metadatas"])
-    found = list(data.get("ids") or [])
-    if set(found) != set(ids) or len(found) != len(ids):
-        raise RuntimeError("Chroma verification failed: indexed record IDs are incomplete or duplicated.")
-    docs = list(data.get("documents") or [])
-    metas = list(data.get("metadatas") or [])
-    vectors = _as_list(data.get("embeddings"))
-    if not (len(found) == len(docs) == len(metas) == len(vectors)):
-        raise RuntimeError("Chroma verification failed: record fields are incomplete.")
-    expected = {record_id: i for i, record_id in enumerate(ids)}
-    for i, record_id in enumerate(found):
-        j = expected[record_id]
-        if docs[i] != texts[j]:
-            raise RuntimeError(f"Chroma verification failed: text mismatch for {record_id}.")
-        if dict(metas[i] or {}) != metadatas[j]:
-            raise RuntimeError(f"Chroma verification failed: metadata mismatch for {record_id}.")
-        if len(_as_list(vectors[i])) != dimension:
-            raise RuntimeError(f"Chroma verification failed: vector dimension mismatch for {record_id}.")
-        if (metas[i] or {}).get("memory_id") != memory_id:
-            raise RuntimeError(f"Chroma verification failed: memory identity mismatch for {record_id}.")
-
-
-def _rollback(collection: Any, memory_id: str, old: dict[str, list],
-              attempted_ids: list[str]) -> None:
-    """Restore the prior records and remove newly created partial records."""
-    old_ids = set(old["ids"])
-    new_ids = [x for x in attempted_ids if x not in old_ids]
-    if new_ids:
-        collection.delete(ids=new_ids)
-    if old["ids"]:
-        collection.upsert(ids=old["ids"], embeddings=old["embeddings"],
-                          documents=old["documents"], metadatas=old["metadatas"])
-    current = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
-    stale = [x for x in (current.get("ids") or []) if x not in old_ids]
-    if stale:
-        collection.delete(ids=stale)
-
+# ============================================================
+# Indexing
+# ============================================================
 
 def index_memory(memory_id: str, user_id: str, memory_type: str,
                  chunks: list[Document],
                  progress_callback: Optional[Callable[[str], None]] = None) -> int:
-    """Embed independently, then serialize the Chroma replace/verify transaction."""
+    """Embed chunks, then replace the memory's points in Qdrant. Returns the chunk count."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
     if not user_id or not user_id.strip():
@@ -187,144 +327,81 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
     if not chunks:
         raise ValueError("Cannot index a memory with no chunks.")
 
-    documents, ids = [], []
+    texts, metadatas = [], []
     for i, chunk in enumerate(chunks):
         text = getattr(chunk, "page_content", None)
         if not isinstance(text, str) or not text.strip():
             raise ValueError(f"Chunk {i} has empty or invalid text.")
-        metadata = _safe_metadata(getattr(chunk, "metadata", None))
-        metadata.update({"memory_id": memory_id, "user_id": user_id,
-                         "memory_type": memory_type, "chunk_index": i})
-        documents.append(Document(page_content=text, metadata=metadata))
-        ids.append(f"{memory_id}_chunk_{i}")
+        texts.append(text)
+        metadatas.append(_safe_metadata(getattr(chunk, "metadata", None)))
 
-    texts = [d.page_content for d in documents]
-    metadatas = [dict(d.metadata) for d in documents]
     batch_size = int(getattr(settings, "EMBEDDING_BATCH_SIZE", 32))
-    if batch_size <= 0:
-        raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero.")
-
-    # Read the established collection dimension while protected from concurrent
-    # collection operations. Do not hold this lock during potentially slow model
-    # inference; different jobs can prepare their embeddings independently.
-    collection = get_vector_store()._collection
-    with timed_lock(logger, _CHROMA_LOCK, "chroma", "read_collection_dimension",
-                    memory=memory_id):
-        existing_dimension = _collection_dimension(collection)
+    client = get_client()
 
     if progress_callback:
         progress_callback("embedding")
-    # The supplied rag/embeddings.py uses HuggingFaceEmbeddings locally, not an
-    # embedding API. _embed_batches limits local inference per batch to reduce
-    # CPU/RAM spikes while allowing other jobs between batches.
+    # Local embedding runs outside the Qdrant lock so jobs can embed in parallel.
     embed_started = time.perf_counter()
-    vectors = _embed_batches(texts, get_embeddings(), batch_size, existing_dimension)
-    dimension = len(vectors[0])
+    vectors = _embed_batches(texts, get_embeddings(), batch_size, settings.EMBEDDING_DIMENSION)
     log_event(logger, "INGEST_TIMING", stage="embedding", memory=memory_id,
-              seconds=time.perf_counter() - embed_started, chunks=len(texts), dimension=dimension)
+              seconds=time.perf_counter() - embed_started, chunks=len(texts),
+              dimension=len(vectors[0]))
 
     if progress_callback:
         progress_callback("indexing")
-    # Snapshot + upsert + verify + stale cleanup + rollback are one critical
-    # section so two jobs cannot interleave writes to the shared collection.
-    chroma_started = time.perf_counter()
-    with timed_lock(logger, _CHROMA_LOCK, "chroma", "replace_memory_index",
-                    memory=memory_id, chunks=len(ids)):
-        with StageTimer(logger, "chroma_snapshot", memory=memory_id) as timer:
-            old = _snapshot(collection, memory_id)
-            timer.set(records=len(old["ids"]))
-        current_dimension = _collection_dimension(collection)
-        if current_dimension is not None and current_dimension != dimension:
-            raise ValueError(
-                f"Embedding dimension mismatch: collection has {current_dimension}, generated {dimension}."
-            )
-        try:
-            upsert_started = time.perf_counter()
-            for start in range(0, len(ids), batch_size):
-                end = start + batch_size
-                batch_started = time.perf_counter()
-                collection.upsert(ids=ids[start:end], embeddings=vectors[start:end],
-                                  documents=texts[start:end], metadatas=metadatas[start:end])
-                log_event(logger, "INGEST_CHROMA_BATCH_SUCCESS", memory=memory_id,
-                          batch=start // batch_size + 1, start=start,
-                          items=len(ids[start:end]), seconds=time.perf_counter() - batch_started)
-            log_event(logger, "INGEST_TIMING", stage="chroma_upsert", memory=memory_id,
-                      seconds=time.perf_counter() - upsert_started, chunks=len(ids),
-                      batches=(len(ids) + batch_size - 1) // batch_size)
-            with StageTimer(logger, "chroma_verification", memory=memory_id, chunks=len(ids)):
-                _verify_records(collection, memory_id, ids, texts, metadatas, dimension)
-            expected_ids = set(ids)
-            with StageTimer(logger, "chroma_stale_cleanup", memory=memory_id) as timer:
-                stale = [x for x in old["ids"] if x not in expected_ids]
-                if stale:
-                    collection.delete(ids=stale)
-                timer.set(stale_records=len(stale))
-            with StageTimer(logger, "chroma_final_verification", memory=memory_id,
-                            expected_records=len(expected_ids)) as timer:
-                final = collection.get(where={"memory_id": memory_id}, include=["metadatas"])
-                final_ids = list(final.get("ids") or [])
-                timer.set(actual_records=len(final_ids))
-            if set(final_ids) != expected_ids or len(final_ids) != len(expected_ids):
-                raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
-            log_event(logger, "INGEST_TIMING", stage="chroma_indexing", memory=memory_id,
-                      seconds=time.perf_counter() - chroma_started, chunks=len(ids))
-            return len(ids)
-        except Exception as error:
-            log_event(logger, "INGEST_CHROMA_INDEX_ERROR", logging.ERROR, memory=memory_id,
-                      error=type(error).__name__, chunks=len(ids),
-                      seconds=time.perf_counter() - chroma_started)
-            try:
-                with StageTimer(logger, "chroma_rollback", memory=memory_id,
-                                attempted_records=len(ids), restored_records=len(old["ids"])):
-                    _rollback(collection, memory_id, old, ids)
-            except Exception as rollback_error:
-                log_event(logger, "INGEST_CHROMA_ROLLBACK_ERROR", logging.CRITICAL,
-                          memory=memory_id, error=type(rollback_error).__name__)
-                raise RuntimeError(
-                    "Indexing failed and rollback also failed. Inspect/restore Chroma before retrying. "
-                    f"Indexing error: {error}; rollback error: {rollback_error}"
-                ) from error
-            log_event(logger, "INGEST_CHROMA_ROLLBACK_SUCCESS", logging.WARNING,
-                      memory=memory_id, restored_records=len(old["ids"]))
-            raise
+    points = [_make_point(memory_id, user_id, memory_type, i, texts[i], metadatas[i], vectors[i])
+              for i in range(len(texts))]
+    _replace_memory_points(client, memory_id, points)
+    return len(points)
+
+
+def delete_memory_index(memory_id: str) -> None:
+    """Remove every chunk of a memory (no-op if it has none)."""
+    if not memory_id or not memory_id.strip():
+        raise ValueError("Memory ID cannot be empty.")
+    client = get_client()
+    with timed_lock(logger, QDRANT_LOCK, "qdrant", "delete_memory_index", memory=memory_id):
+        client.delete(COLLECTION_NAME,
+                      points_selector=models.FilterSelector(filter=memory_filter(memory_id)),
+                      wait=True)
+
 
 def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None = None) -> dict[str, Any]:
     """Return a diagnostic report for indexed records belonging to one memory."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
-    with timed_lock(logger, _CHROMA_LOCK, "chroma", "verify_memory_index",
-                    memory=memory_id):
-        data = get_vector_store()._collection.get(where={"memory_id": memory_id},
-                                                   include=["embeddings", "documents", "metadatas"])
-    ids = list(data.get("ids") or [])
-    docs = list(data.get("documents") or [])
-    metas = list(data.get("metadatas") or [])
-    vectors = _as_list(data.get("embeddings"))
+    client = get_client()
+    with timed_lock(logger, QDRANT_LOCK, "qdrant", "verify_memory_index", memory=memory_id):
+        points = _scroll(client, memory_filter(memory_id), with_payload=True,
+                         with_vectors=[DENSE_VECTOR])
+    payloads = [p.payload or {} for p in points]
+    ids = [pl.get("chunk_id") for pl in payloads]
     errors = []
-    if not ids:
+    if not points:
         errors.append("No indexed records found for this memory.")
-    if not (len(ids) == len(docs) == len(metas) == len(vectors)):
-        errors.append("Indexed record fields are incomplete.")
     if len(ids) != len(set(ids)):
         errors.append("Duplicate record IDs were returned.")
-    dimensions = {len(_as_list(v)) for v in vectors if _as_list(v)}
-    if len(dimensions) > 1:
-        errors.append("Indexed vectors have inconsistent dimensions.")
-    if any((m or {}).get("memory_id") != memory_id for m in metas):
+    dimensions = {len((p.vector or {}).get(DENSE_VECTOR) or []) for p in points}
+    if len(dimensions) > 1 or 0 in dimensions:
+        errors.append("Indexed vectors are missing or have inconsistent dimensions.")
+    if any(pl.get("memory_id") != memory_id for pl in payloads):
         errors.append("A record has an incorrect memory_id.")
     if expected_chunks is not None:
-        expected_texts = [c.page_content for c in expected_chunks]
-        actual = dict(zip(ids, docs))
-        expected_ids = [f"{memory_id}_chunk_{i}" for i in range(len(expected_texts))]
+        actual = {pl.get("chunk_id"): pl.get(TEXT_KEY) for pl in payloads}
+        expected_ids = [_chunk_id(memory_id, i) for i in range(len(expected_chunks))]
         if set(actual) != set(expected_ids):
             errors.append("Indexed IDs do not match expected chunk IDs.")
-        for record_id, text in zip(expected_ids, expected_texts):
-            if actual.get(record_id) != text:
+        for record_id, chunk in zip(expected_ids, expected_chunks):
+            if actual.get(record_id) != chunk.page_content:
                 errors.append(f"Indexed text mismatch for {record_id}.")
-    return {"valid": not errors, "memory_id": memory_id, "record_count": len(ids),
+    return {"valid": not errors, "memory_id": memory_id, "record_count": len(points),
             "embedding_dimension": next(iter(dimensions)) if len(dimensions) == 1 else None,
             "errors": errors, "ids": ids}
 
+
+# ============================================================
+# Duplicate reuse
+# ============================================================
 
 class VectorReuseError(Exception):
     """The source memory's vectors cannot be safely reused (``reason`` says why)."""
@@ -336,23 +413,12 @@ class VectorReuseError(Exception):
 
 def clone_memory_index(*, source_memory_id: str, target_memory_id: str, user_id: str,
                        memory_type: str, expected_texts: list[str]) -> int:
-    """Copy an existing memory's vectors to a new memory without re-embedding.
+    """Copy an existing memory's dense vectors to a new memory without re-embedding.
 
-    Safe by construction:
-      * the source records must be complete, belong to ``user_id``, have
-        contiguous chunk IDs, and their stored text must equal ``expected_texts``
-        (the chunks the *current* chunking settings produce from the source's
-        extracted text) - so a changed CHUNK_SIZE/OVERLAP or a damaged index is
-        detected and reuse is refused;
-      * vectors must be finite and match the collection's embedding dimension;
-      * new records use the normal ID scheme ``<target>_chunk_<i>`` and metadata
-        is copied with ``memory_id``/``user_id``/``memory_type``/``chunk_index``
-        updated to the target;
-      * the write is verified and rolled back on failure, exactly like
-        ``index_memory``. Source records are only ever read.
-
-    Raises ``VectorReuseError`` for any validation failure (caller falls back to
-    the normal pipeline). Returns the number of cloned records.
+    The source records must be complete, belong to ``user_id`` and their stored
+    text must equal ``expected_texts`` (what the *current* chunking produces),
+    otherwise ``VectorReuseError`` is raised and the caller falls back to the
+    normal pipeline. The source is only ever read.
     """
     for name, value in (("source_memory_id", source_memory_id), ("target_memory_id", target_memory_id),
                         ("user_id", user_id), ("memory_type", memory_type)):
@@ -362,96 +428,40 @@ def clone_memory_index(*, source_memory_id: str, target_memory_id: str, user_id:
         raise VectorReuseError("source_is_target")
     if not expected_texts:
         raise VectorReuseError("no_expected_chunks")
-    batch_size = int(getattr(settings, "EMBEDDING_BATCH_SIZE", 32))
-    if batch_size <= 0:
-        raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero.")
 
-    collection = get_vector_store()._collection
-    with timed_lock(logger, _CHROMA_LOCK, "chroma", "read_duplicate_source_vectors",
+    client = get_client()
+    with timed_lock(logger, QDRANT_LOCK, "qdrant", "read_duplicate_source_vectors",
                     memory=source_memory_id, target_memory=target_memory_id):
-        data = collection.get(where={"memory_id": source_memory_id},
-                              include=["embeddings", "documents", "metadatas"])
-        ids = list(data.get("ids") or [])
-        docs = list(data.get("documents") or [])
-        metas = list(data.get("metadatas") or [])
-        raw_vectors = _as_list(data.get("embeddings"))
-        if not ids:
-            raise VectorReuseError("source_vectors_missing")
-        if not (len(ids) == len(docs) == len(metas) == len(raw_vectors)):
-            raise VectorReuseError("source_vectors_incomplete")
-        if len(ids) != len(set(ids)):
-            raise VectorReuseError("source_duplicate_ids")
-        if len(ids) != len(expected_texts):
-            raise VectorReuseError("chunk_count_mismatch")
+        source = _scroll(client, memory_filter(source_memory_id, user_id), with_payload=True,
+                         with_vectors=[DENSE_VECTOR])
+    if not source:
+        raise VectorReuseError("source_vectors_missing")
+    if len(source) != len(expected_texts):
+        raise VectorReuseError("chunk_count_mismatch")
 
-        position = {record_id: i for i, record_id in enumerate(ids)}
-        new_ids, new_vectors, new_metadatas = [], [], []
-        dimension: int | None = None
-        for index, expected_text in enumerate(expected_texts):
-            pos = position.get(f"{source_memory_id}_chunk_{index}")
-            if pos is None:
-                raise VectorReuseError("chunk_ids_mismatch")
-            if docs[pos] != expected_text:
-                raise VectorReuseError("chunk_text_mismatch")
-            meta = dict(metas[pos] or {})
-            if meta.get("memory_id") != source_memory_id or meta.get("user_id") != user_id:
-                raise VectorReuseError("source_metadata_mismatch")
-            vector = [float(x) for x in _as_list(raw_vectors[pos])]
-            if not vector or any(not math.isfinite(x) for x in vector):
-                raise VectorReuseError("source_vector_invalid")
-            if dimension is None:
-                dimension = len(vector)
-            elif len(vector) != dimension:
-                raise VectorReuseError("dimension_inconsistent")
-            meta.update({"memory_id": target_memory_id, "user_id": user_id,
-                         "memory_type": memory_type, "chunk_index": index})
-            new_ids.append(f"{target_memory_id}_chunk_{index}")
-            new_vectors.append(vector)
-            new_metadatas.append(_safe_metadata(meta))
+    by_index = {(p.payload or {}).get("chunk_index"): p for p in source}
+    if len(by_index) != len(source):
+        raise VectorReuseError("source_duplicate_ids")
 
-        collection_dimension = _collection_dimension(collection)
-        if collection_dimension is not None and collection_dimension != dimension:
+    points = []
+    for index, expected_text in enumerate(expected_texts):
+        source_point = by_index.get(index)
+        if source_point is None:
+            raise VectorReuseError("chunk_ids_mismatch")
+        payload = dict(source_point.payload or {})
+        if payload.get(TEXT_KEY) != expected_text:
+            raise VectorReuseError("chunk_text_mismatch")
+        if payload.get("memory_id") != source_memory_id or payload.get("user_id") != user_id:
+            raise VectorReuseError("source_metadata_mismatch")
+        dense = [float(x) for x in _as_list((source_point.vector or {}).get(DENSE_VECTOR))]
+        if not dense or any(not math.isfinite(x) for x in dense):
+            raise VectorReuseError("source_vector_invalid")
+        if len(dense) != settings.EMBEDDING_DIMENSION:
             raise VectorReuseError("dimension_mismatch")
+        for key in ("memory_id", "user_id", "memory_type", "chunk_index", "chunk_id", TEXT_KEY):
+            payload.pop(key, None)
+        points.append(_make_point(target_memory_id, user_id, memory_type, index,
+                                  expected_text, payload, dense))
 
-        with StageTimer(logger, "chroma_snapshot", memory=target_memory_id) as timer:
-            old = _snapshot(collection, target_memory_id)
-            timer.set(records=len(old["ids"]))
-        try:
-            upsert_started = time.perf_counter()
-            for start in range(0, len(new_ids), batch_size):
-                end = start + batch_size
-                collection.upsert(ids=new_ids[start:end], embeddings=new_vectors[start:end],
-                                  documents=list(expected_texts[start:end]),
-                                  metadatas=new_metadatas[start:end])
-            log_event(logger, "INGEST_TIMING", stage="chroma_clone_upsert", memory=target_memory_id,
-                      seconds=time.perf_counter() - upsert_started, chunks=len(new_ids),
-                      batches=(len(new_ids) + batch_size - 1) // batch_size)
-            with StageTimer(logger, "chroma_verification", memory=target_memory_id,
-                            chunks=len(new_ids)):
-                _verify_records(collection, target_memory_id, new_ids, list(expected_texts),
-                                new_metadatas, dimension)
-            expected_set = set(new_ids)
-            with StageTimer(logger, "chroma_stale_cleanup", memory=target_memory_id) as timer:
-                stale = [x for x in old["ids"] if x not in expected_set]
-                if stale:
-                    collection.delete(ids=stale)
-                timer.set(stale_records=len(stale))
-            with StageTimer(logger, "chroma_final_verification", memory=target_memory_id,
-                            expected_records=len(expected_set)) as timer:
-                final = collection.get(where={"memory_id": target_memory_id}, include=["metadatas"])
-                final_ids = list(final.get("ids") or [])
-                timer.set(actual_records=len(final_ids))
-            if set(final_ids) != expected_set or len(final_ids) != len(expected_set):
-                raise RuntimeError("Chroma verification failed: stale or missing memory chunks remain.")
-            return len(new_ids)
-        except Exception as error:
-            try:
-                with StageTimer(logger, "chroma_rollback", memory=target_memory_id,
-                                attempted_records=len(new_ids), restored_records=len(old["ids"])):
-                    _rollback(collection, target_memory_id, old, new_ids)
-            except Exception as rollback_error:
-                raise RuntimeError(
-                    "Vector clone failed and rollback also failed. Inspect/restore Chroma before retrying. "
-                    f"Clone error: {type(error).__name__}; rollback error: {type(rollback_error).__name__}"
-                ) from error
-            raise
+    _replace_memory_points(client, target_memory_id, points)
+    return len(points)

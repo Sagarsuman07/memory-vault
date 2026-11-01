@@ -44,7 +44,7 @@ from rag.chunker import split_text
 
 from rag.vector_store import (
     index_memory,
-    get_vector_store,
+    delete_memory_index,
 )
 
 
@@ -259,8 +259,7 @@ def create_new_memory(
 
         # Remove any partial vector records associated with this newly generated ID.
         try:
-            vector_store = get_vector_store()
-            vector_store.delete(where={"memory_id": memory_id})
+            delete_memory_index(memory_id)
         except Exception:
             pass
 
@@ -535,13 +534,7 @@ def delete_memory(
     # Delete vector records
     # ========================================================
 
-    vector_store = get_vector_store()
-
-    vector_store.delete(
-        where={
-            "memory_id": memory_id
-        }
-    )
+    delete_memory_index(memory_id)
 
     # ========================================================
     # Delete original file
@@ -1011,13 +1004,7 @@ def _create_memory_from_demo_text(
 
         try:
 
-            vector_store = get_vector_store()
-
-            vector_store.delete(
-                where={
-                    "memory_id": memory_id
-                }
-            )
+            delete_memory_index(memory_id)
 
         except Exception:
             pass

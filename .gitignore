@@ -21,6 +21,7 @@ memory_vault.db
 *.db-wal
 
 .chroma/
+.qdrant/
 
 # Runtime logs
 logs/*.log

@@ -1,5 +1,3 @@
-
-
 Pillow
 reportlab
 
@@ -16,13 +14,11 @@ python-dotenv
 langchain
 langchain-core
 langgraph
-chromadb
 sqlalchemy
 pydantic
 
 
 streamlit==1.41.0
-python-dotenv
 
 ollama
 groq
@@ -30,8 +26,7 @@ groq
 PyMuPDF
 python-docx
 
-langchain-core
 langchain-text-splitters
-langchain-chroma
 langchain-huggingface
 sentence-transformers
+qdrant-client
