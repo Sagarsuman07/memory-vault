@@ -64,7 +64,13 @@ class _PooledConnection:
     def close(self):
         if not self._returned:
             self._returned = True
-            self._pool.putconn(self._connection)
+            try:
+                # SELECT statements open an implicit transaction in psycopg.
+                # Return pooled connections in a clean, idle state.
+                if not self._connection.autocommit:
+                    self._connection.rollback()
+            finally:
+                self._pool.putconn(self._connection)
 
     def __getattr__(self, name):
         return getattr(self._connection, name)
