@@ -27,6 +27,38 @@ class Settings:
         "memory_vault.db",
     )
 
+    # ============================================================
+    # Supabase PostgreSQL
+    # ============================================================
+
+    # Read the connection string from environment/.env first, then
+    # Streamlit secrets when deployed on Streamlit Community Cloud.
+    @staticmethod
+    def _read_secret(name, default=None):
+        value = os.getenv(name)
+        if value:
+            return value
+        try:
+            import streamlit as st
+            return st.secrets.get(name, default)
+        except Exception:
+            return default
+
+    DATABASE_URL = _read_secret.__func__("DATABASE_URL")
+
+    DB_POOL_MIN_SIZE = int(_read_secret.__func__("DB_POOL_MIN_SIZE", "1"))
+    DB_POOL_MAX_SIZE = int(_read_secret.__func__("DB_POOL_MAX_SIZE", "3"))
+    DB_POOL_TIMEOUT_SECONDS = float(
+        _read_secret.__func__("DB_POOL_TIMEOUT_SECONDS", "10")
+    )
+    DB_CONNECT_TIMEOUT_SECONDS = int(
+        _read_secret.__func__("DB_CONNECT_TIMEOUT_SECONDS", "8")
+    )
+    DB_STATEMENT_TIMEOUT_MS = int(
+        _read_secret.__func__("DB_STATEMENT_TIMEOUT_MS", "30000")
+    )
+
+
     UPLOAD_DIR = os.getenv(
         "UPLOAD_DIR",
         "uploads",
