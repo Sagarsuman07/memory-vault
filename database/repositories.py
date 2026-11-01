@@ -6,194 +6,108 @@ from database.models import Memory
 # CREATE
 # ============================================================
 
-def create_memory(
-    memory: Memory
-):
+def _iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
 
+
+def _memory_from_row(row):
+    if row is None:
+        return None
+    result = dict(row)
+    result["file_path"] = result.get("legacy_file_path") or result.get("file_path")
+    result["extracted_text"] = result.get("legacy_extracted_text") or result.get("extracted_text")
+    result["created_at"] = _iso(result.get("created_at"))
+    result["updated_at"] = _iso(result.get("updated_at"))
+    return result
+
+
+def create_memory(memory: Memory):
+    """Create a memory using the PostgreSQL schema and legacy-compatible fields."""
     connection = get_connection()
-
-    cursor = connection.cursor()
-
-
-    cursor.execute(
-        """
-        INSERT INTO memories (
-            id,
-            user_id,
-            memory_type,
-            title,
-            file_name,
-            file_path,
-            summary,
-            extracted_text,
-            created_at,
-            updated_at
+    try:
+        connection.execute(
+            """INSERT INTO memories (
+                id, user_id, memory_type, title, file_name,
+                original_file_key, extracted_text_key,
+                legacy_file_path, legacy_extracted_text, summary,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                memory.id, memory.user_id, memory.memory_type, memory.title,
+                memory.file_name, getattr(memory, "original_file_key", None),
+                getattr(memory, "extracted_text_key", None), memory.file_path,
+                memory.extracted_text, memory.summary, memory.created_at,
+                memory.updated_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            memory.id,
-            memory.user_id,
-            memory.memory_type,
-            memory.title,
-            memory.file_name,
-            memory.file_path,
-            memory.summary,
-            memory.extracted_text,
-            memory.created_at,
-            memory.updated_at,
-        ),
-    )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
-    connection.commit()
-
-    connection.close()
-
-
-# ============================================================
-# GET ONE MEMORY
-# ============================================================
-
-def get_memory(
-    memory_id: str,
-    user_id: str
-):
-
+def get_memory(memory_id: str, user_id: str):
     connection = get_connection()
-
-    cursor = connection.cursor()
-
-
-    cursor.execute(
-        """
-        SELECT *
-        FROM memories
-        WHERE id = ?
-        AND user_id = ?
-        """,
-        (
-            memory_id,
-            user_id,
-        ),
-    )
+    try:
+        row = connection.execute(
+            """SELECT *, legacy_file_path AS file_path,
+                      legacy_extracted_text AS extracted_text
+               FROM memories WHERE id = ? AND user_id = ?""",
+            (memory_id, user_id),
+        ).fetchone()
+        return _memory_from_row(row)
+    finally:
+        connection.close()
 
 
-    memory = cursor.fetchone()
-
-    connection.close()
-
-    return memory
-
-
-# ============================================================
-# LIST MEMORIES
-# ============================================================
-
-def get_all_memories(
-    user_id: str
-):
-
+def get_all_memories(user_id: str):
     connection = get_connection()
-
-    cursor = connection.cursor()
-
-
-    cursor.execute(
-        """
-        SELECT *
-        FROM memories
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        """,
-        (user_id,),
-    )
+    try:
+        rows = connection.execute(
+            """SELECT *, legacy_file_path AS file_path,
+                      legacy_extracted_text AS extracted_text
+               FROM memories WHERE user_id = ? ORDER BY created_at DESC""",
+            (user_id,),
+        ).fetchall()
+        return [_memory_from_row(row) for row in rows]
+    finally:
+        connection.close()
 
 
-    memories = cursor.fetchall()
-
-    connection.close()
-
-    return memories
-
-
-# ============================================================
-# UPDATE MEMORY
-# ============================================================
-
-def update_memory(
-    memory_id: str,
-    user_id: str,
-    title: str,
-    summary: str
-):
-
+def update_memory(memory_id: str, user_id: str, title: str, summary: str):
     connection = get_connection()
-
-    cursor = connection.cursor()
-
-
-    cursor.execute(
-        """
-        UPDATE memories
-        SET title = ?,
-            summary = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        AND user_id = ?
-        """,
-        (
-            title,
-            summary,
-            memory_id,
-            user_id,
-        ),
-    )
+    try:
+        cursor = connection.execute(
+            """UPDATE memories SET title = ?, summary = ?,
+                      updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND user_id = ?""",
+            (title, summary, memory_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
-    connection.commit()
-
-    rows_updated = cursor.rowcount
-
-    connection.close()
-
-    return rows_updated > 0
-
-
-# ============================================================
-# DELETE MEMORY
-# ============================================================
-
-def delete_memory(
-    memory_id: str,
-    user_id: str
-):
-
+def delete_memory(memory_id: str, user_id: str):
     connection = get_connection()
-
-    cursor = connection.cursor()
-
-
-    cursor.execute(
-        """
-        DELETE FROM memories
-        WHERE id = ?
-        AND user_id = ?
-        """,
-        (
-            memory_id,
-            user_id,
-        ),
-    )
-
-
-    connection.commit()
-
-    rows_deleted = cursor.rowcount
-
-    connection.close()
-
-    return rows_deleted > 0
+    try:
+        cursor = connection.execute(
+            "DELETE FROM memories WHERE id = ? AND user_id = ?",
+            (memory_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 # ============================================================
@@ -658,6 +572,90 @@ def update_ingestion_source(source_id: str, user_id: str, **fields) -> bool:
         )
         connection.commit()
         return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+# ============================================================
+# CHAT THREAD REGISTRY
+# ============================================================
+
+def upsert_chat_thread(thread_id: str, user_id: str, title: str) -> None:
+    """Register a user's chat thread after its first successful graph run."""
+    if not thread_id or not thread_id.strip() or not user_id or not user_id.strip():
+        raise ValueError("thread_id and user_id must not be empty")
+    safe_title = (title or "New conversation").strip()[:200] or "New conversation"
+    connection = get_connection()
+    try:
+        connection.execute(
+            """INSERT INTO chat_threads (thread_id, user_id, title)
+               VALUES (?, ?, ?)
+               ON CONFLICT (thread_id) DO UPDATE
+               SET updated_at = CURRENT_TIMESTAMP
+               WHERE chat_threads.user_id = EXCLUDED.user_id""",
+            (thread_id, user_id, safe_title),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def list_chat_threads(user_id: str) -> list[dict]:
+    """List only the specified user's registered chat threads."""
+    if not user_id or not user_id.strip():
+        raise ValueError("user_id must not be empty")
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """SELECT thread_id, user_id, title, created_at, updated_at
+               FROM chat_threads WHERE user_id = ?
+               ORDER BY updated_at ASC, created_at ASC""",
+            (user_id,),
+        ).fetchall()
+        return [
+            {**row, "created_at": _iso(row.get("created_at")),
+             "updated_at": _iso(row.get("updated_at"))}
+            for row in rows
+        ]
+    finally:
+        connection.close()
+
+
+def delete_chat_thread(thread_id: str, user_id: str) -> bool:
+    """Delete a chat registry row only when it belongs to the requesting user."""
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            "DELETE FROM chat_threads WHERE thread_id = ? AND user_id = ?",
+            (thread_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def update_memory_extracted_text(memory_id: str, user_id: str, text: str) -> bool:
+    """Persist extracted text for the specified user's memory."""
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            """UPDATE memories SET legacy_extracted_text = ?,
+                      updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND user_id = ?""",
+            (text, memory_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount == 1
     except Exception:
         connection.rollback()
         raise
