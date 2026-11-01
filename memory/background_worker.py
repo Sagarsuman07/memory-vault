@@ -21,6 +21,7 @@ from database.repositories import (
     get_memory,
     update_memory_extracted_text,
     get_preparation_job,
+    list_preparation_jobs,
     transition_preparation_job,
     update_preparation_job_progress,
     update_ingestion_source,
@@ -336,21 +337,14 @@ def _recover_interrupted_jobs_on_startup() -> None:
     a legitimately long-running PDF for a dead worker and launching it twice.
     This local-app design assumes a single application process owns the worker.
     """
-    connection = get_connection()
-    try:
-        rows = connection.execute(
-            "SELECT id, user_id, attempt_count FROM preparation_jobs WHERE status = 'running'"
-        ).fetchall()
-        # Phase 7's Stop control has been retired. Clear only its obsolete request
-        # records if that optional table exists; do not delete memories or vectors.
-        table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preparation_job_cancellations'"
-        ).fetchone()
-        if table:
-            connection.execute("DELETE FROM preparation_job_cancellations")
-            connection.commit()
-    finally:
-        connection.close()
+    running_jobs = list_preparation_jobs(
+        settings.DEMO_USER_ID,
+        statuses=(JobStatus.RUNNING,),
+    )
+    rows = [
+        {"id": job.id, "user_id": job.user_id, "attempt_count": job.attempt_count}
+        for job in running_jobs
+    ]
 
     max_attempts = max(1, int(getattr(settings, "INGESTION_MAX_ATTEMPTS", 3)))
     for row in rows:
