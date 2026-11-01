@@ -464,7 +464,7 @@ def update_preparation_job_progress(
     try:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         if row is None:
