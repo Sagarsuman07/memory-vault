@@ -318,7 +318,7 @@ def get_preparation_job(job_id: str, user_id: str) -> PreparationJob | None:
     connection = get_connection()
     try:
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
             (job_id, user_id),
         ).fetchone()
         return _job_from_row(row)
@@ -374,7 +374,7 @@ def transition_preparation_job(
     try:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         if row is None:
