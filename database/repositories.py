@@ -23,13 +23,15 @@ def create_memory(
             memory_type,
             title,
             file_name,
-            file_path,
+            original_file_key,
+            extracted_text_key,
+            legacy_file_path,
+            legacy_extracted_text,
             summary,
-            extracted_text,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             memory.id,
@@ -37,9 +39,11 @@ def create_memory(
             memory.memory_type,
             memory.title,
             memory.file_name,
+            memory.original_file_key,
+            memory.extracted_text_key,
             memory.file_path,
-            memory.summary,
             memory.extracted_text,
+            memory.summary,
             memory.created_at,
             memory.updated_at,
         ),
@@ -67,7 +71,8 @@ def get_memory(
 
     cursor.execute(
         """
-        SELECT *
+        SELECT memories.*, legacy_file_path AS file_path,
+               legacy_extracted_text AS extracted_text
         FROM memories
         WHERE id = ?
         AND user_id = ?
@@ -79,7 +84,7 @@ def get_memory(
     )
 
 
-    memory = cursor.fetchone()
+    memory = _memory_from_row(cursor.fetchone())
 
     connection.close()
 
@@ -101,7 +106,8 @@ def get_all_memories(
 
     cursor.execute(
         """
-        SELECT *
+        SELECT memories.*, legacy_file_path AS file_path,
+               legacy_extracted_text AS extracted_text
         FROM memories
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -110,7 +116,7 @@ def get_all_memories(
     )
 
 
-    memories = cursor.fetchall()
+    memories = [_memory_from_row(row) for row in cursor.fetchall()]
 
     connection.close()
 
@@ -213,6 +219,21 @@ from memory.memory_models import (
 )
 
 
+def _iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _memory_from_row(row):
+    if row is None:
+        return None
+    result = dict(row)
+    result["file_path"] = result.get("file_path") or result.get("legacy_file_path")
+    result["extracted_text"] = result.get("extracted_text") or result.get("legacy_extracted_text")
+    result["created_at"] = _iso(result.get("created_at"))
+    result["updated_at"] = _iso(result.get("updated_at"))
+    return result
+
+
 def _job_from_row(row):
     if row is None:
         return None
@@ -230,10 +251,10 @@ def _job_from_row(row):
             if row["error_category"] else None
         ),
         error_message=row["error_message"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        started_at=row["started_at"],
-        finished_at=row["finished_at"],
+        created_at=_iso(row["created_at"]),
+        updated_at=_iso(row["updated_at"]),
+        started_at=_iso(row["started_at"]),
+        finished_at=_iso(row["finished_at"]),
     )
 
 
@@ -281,7 +302,7 @@ def create_preparation_job(
         )
         connection.commit()
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         return _job_from_row(row)
@@ -297,7 +318,7 @@ def get_preparation_job(job_id: str, user_id: str) -> PreparationJob | None:
     connection = get_connection()
     try:
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         return _job_from_row(row)
@@ -518,8 +539,8 @@ def _ingestion_source_from_row(row):
         metadata_json=row["metadata_json"],
         error_category=row["error_category"],
         error_message=row["error_message"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
+        created_at=_iso(row["created_at"]),
+        updated_at=_iso(row["updated_at"]),
     )
 
 
@@ -655,6 +676,67 @@ def update_ingestion_source(source_id: str, user_id: str, **fields) -> bool:
             f"UPDATE ingestion_sources SET {', '.join(assignments)} "
             "WHERE source_id = ? AND user_id = ?",
             (*values, source_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+# ============================================================
+# CHAT THREAD REGISTRY
+# ============================================================
+
+def upsert_chat_thread(thread_id: str, user_id: str, title: str) -> None:
+    """Register a conversation after its first successful graph invocation."""
+    if not thread_id or not thread_id.strip() or not user_id or not user_id.strip():
+        raise ValueError("thread_id and user_id must not be empty")
+    safe_title = (title or "New conversation").strip()[:200] or "New conversation"
+    connection = get_connection()
+    try:
+        connection.execute(
+            """INSERT INTO chat_threads (thread_id, user_id, title)
+               VALUES (?, ?, ?)
+               ON CONFLICT (thread_id) DO UPDATE
+               SET updated_at = CURRENT_TIMESTAMP
+               WHERE chat_threads.user_id = EXCLUDED.user_id""",
+            (thread_id, user_id, safe_title),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def list_chat_threads(user_id: str) -> list[dict]:
+    """List only the requesting user's threads, oldest activity first."""
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """SELECT thread_id, user_id, title, created_at, updated_at
+               FROM chat_threads WHERE user_id = ? ORDER BY updated_at ASC, created_at ASC""",
+            (user_id,),
+        ).fetchall()
+        return [
+            {**row, "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])}
+            for row in rows
+        ]
+    finally:
+        connection.close()
+
+
+def delete_chat_thread(thread_id: str, user_id: str) -> bool:
+    """Delete a conversation registry row within its owner's scope."""
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            "DELETE FROM chat_threads WHERE thread_id = ? AND user_id = ?",
+            (thread_id, user_id),
         )
         connection.commit()
         return cursor.rowcount > 0

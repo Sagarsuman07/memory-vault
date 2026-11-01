@@ -1,6 +1,9 @@
-import sqlite3
 import uuid
 from functools import lru_cache
+from threading import RLock
+
+from psycopg_pool import ConnectionPool
+from langgraph.checkpoint.postgres import PostgresSaver
 
 from langgraph.graph import (
     StateGraph,
@@ -10,10 +13,6 @@ from langgraph.graph import (
 
 from langgraph.prebuilt import (
     tools_condition,
-)
-
-from langgraph.checkpoint.sqlite import (
-    SqliteSaver,
 )
 
 from agent.state import (
@@ -44,23 +43,65 @@ from config.settings import settings
 
 from database.repositories import (
     get_memory as get_memory_record,
+    upsert_chat_thread,
+    list_chat_threads,
+    delete_chat_thread,
 )
 
 
 # ============================================================
-# Persistent Checkpointer
+# Persistent PostgreSQL Checkpointer
 # ============================================================
 
-_checkpoint_connection = sqlite3.connect(
-    settings.CHECKPOINT_DATABASE_PATH,
-    check_same_thread=False,
-)
+_checkpoint_pool = None
+_checkpointer = None
+_checkpointer_lock = RLock()
 
-_checkpointer = SqliteSaver(
-    _checkpoint_connection
-)
 
-_checkpointer.setup()
+def initialize_checkpointer():
+    """Initialize one process-wide PostgreSQL checkpointer during app startup."""
+    global _checkpoint_pool, _checkpointer
+    if _checkpointer is not None:
+        return _checkpointer
+    with _checkpointer_lock:
+        if _checkpointer is not None:
+            return _checkpointer
+        if not settings.DATABASE_URL:
+            raise RuntimeError(
+                "DATABASE_URL is required for PostgreSQL-backed LangGraph checkpoints."
+            )
+        pool = ConnectionPool(
+            conninfo=settings.DATABASE_URL,
+            min_size=1,
+            max_size=2,
+            timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+            kwargs={
+                "autocommit": True,
+                "connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS,
+                "application_name": "memory-vault-checkpoints",
+            },
+            open=False,
+        )
+        try:
+            pool.open(wait=True)
+            checkpointer = PostgresSaver(pool)
+            checkpointer.setup()
+        except Exception:
+            pool.close()
+            raise RuntimeError(
+                "Unable to initialize PostgreSQL LangGraph checkpoint storage."
+            ) from None
+        _checkpoint_pool = pool
+        _checkpointer = checkpointer
+    return _checkpointer
+
+
+def delete_conversation_thread(user_id: str, thread_id: str) -> None:
+    """Delete a user's LangGraph checkpoints and conversation registry entry."""
+    validate_thread_id(user_id, thread_id)
+    checkpointer = initialize_checkpointer()
+    checkpointer.delete_thread(thread_id)
+    delete_chat_thread(thread_id, user_id)
 
 
 # ============================================================
@@ -375,7 +416,7 @@ def _compile_agent_graph(
     )
 
     return graph_builder.compile(
-        checkpointer=_checkpointer
+        checkpointer=initialize_checkpointer()
     )
 
 
@@ -528,6 +569,8 @@ def run_langgraph_agent(
             graph.get_state(config).values
         )
 
+    upsert_chat_thread(thread_id, user_id, question)
+
     return {
         "answer":
             result.get(
@@ -627,192 +670,36 @@ def get_thread_state(
     )
 
 
-def _list_user_thread_ids(
-    user_prefix: str,
-) -> list:
-    """
-    Distinct thread IDs of one user, same order as before (oldest
-    activity first).
-
-    The old code read only the newest 1000 checkpoints of ALL users.
-    Every graph step is a checkpoint, so busy users or other users'
-    traffic could push a user's older conversations out of that
-    window. A DISTINCT query has no such blind spot.
-    """
-
-    try:
-
-        with _checkpointer.lock:
-
-            rows = _checkpoint_connection.execute(
-                "SELECT thread_id, MAX(checkpoint_id) AS latest "
-                "FROM checkpoints "
-                "WHERE substr(thread_id, 1, ?) = ? "
-                "GROUP BY thread_id "
-                "ORDER BY latest ASC",
-                (len(user_prefix), user_prefix),
-            ).fetchall()
-
-        return [
-            row[0]
-            for row in rows
-            if row[0]
-        ]
-
-    except Exception:
-
-        # Fallback for a different checkpointer schema/version.
-        thread_ids = []
-
-        for item in _checkpointer.list(
-            None,
-            limit=1000,
-        ):
-
-            thread_id = (
-                item.config
-                .get("configurable", {})
-                .get("thread_id")
-            )
-
-            if (
-                thread_id
-                and thread_id.startswith(user_prefix)
-                and thread_id not in thread_ids
-            ):
-
-                thread_ids.append(thread_id)
-
-        thread_ids.reverse()
-
-        return thread_ids
-
-
-
 # ============================================================
 # Conversation History
 # ============================================================
 
-def get_conversation_history(
-    user_id: str,
-):
-
+def get_conversation_history(user_id: str):
+    """Load conversation summaries from the application registry, not checkpoint internals."""
     if not user_id or not user_id.strip():
-
-        raise ValueError(
-            "User ID cannot be empty."
-        )
-
-    user_prefix = (
-        f"{user_id}:"
-    )
-
-    conversations = []
+        raise ValueError("User ID cannot be empty.")
 
     try:
-
-        thread_ids = _list_user_thread_ids(
-            user_prefix
-        )
-
+        threads = list_chat_threads(user_id)
     except Exception as error:
+        raise RuntimeError("Unable to load conversation history.") from error
 
-        raise RuntimeError(
-            "Unable to load conversation history."
-        ) from error
-
-    for thread_id in thread_ids:
-
+    conversations = []
+    for thread in threads:
+        thread_id = thread["thread_id"]
         try:
-
-            thread_state = get_thread_state(
-                user_id=user_id,
-                thread_id=thread_id,
-            )
-
-            values = (
-                thread_state.values
-                if thread_state is not None
-                else {}
-            )
-
-            messages = values.get(
-                "messages",
-                [],
-            )
-
+            thread_state = get_thread_state(user_id=user_id, thread_id=thread_id)
+            values = thread_state.values if thread_state is not None else {}
+            messages = values.get("messages", [])
             if not messages:
                 continue
-
-            first_question = None
-
-            for message in messages:
-
-                if getattr(
-                    message,
-                    "type",
-                    "",
-                ) != "human":
-
-                    continue
-
-                content = getattr(
-                    message,
-                    "content",
-                    "",
-                )
-
-                if isinstance(
-                    content,
-                    str,
-                ):
-
-                    content = content.strip()
-
-                else:
-
-                    content = str(
-                        content
-                    ).strip()
-
-                if content:
-
-                    first_question = (
-                        content
-                    )
-
-                    break
-
-            if not first_question:
-                continue
-
-            conversations.append(
-                {
-                    "thread_id":
-                        thread_id,
-
-                    "title":
-                        first_question,
-
-                    "scope":
-                        values.get(
-                            "scope",
-                            "all",
-                        ),
-
-                    "memory_id":
-                        values.get(
-                            "memory_id"
-                        ),
-
-                    "message_count":
-                        len(messages),
-                }
-            )
-
+            conversations.append({
+                "thread_id": thread_id,
+                "title": thread.get("title") or "New conversation",
+                "scope": values.get("scope", "all"),
+                "memory_id": values.get("memory_id"),
+                "message_count": len(messages),
+            })
         except Exception:
-
             continue
-
-
     return conversations
