@@ -68,7 +68,7 @@ def _find_candidates(user_id: str, sha256: str, exclude_memory_id: str) -> tuple
                JOIN memories m ON m.id = s.memory_id AND m.user_id = s.user_id
                WHERE s.user_id = ? AND s.sha256 = ? AND s.status = 'loaded'
                  AND s.memory_id IS NOT NULL AND s.memory_id != ? AND s.source_id != ?
-                 AND m.extracted_text IS NOT NULL AND TRIM(m.extracted_text) != ''
+                 AND m.legacy_extracted_text IS NOT NULL AND TRIM(m.legacy_extracted_text) != ''
                ORDER BY s.created_at ASC LIMIT ?""",
             (user_id, sha256, exclude_memory_id, exclude_memory_id, _MAX_CANDIDATES),
         ).fetchall()
