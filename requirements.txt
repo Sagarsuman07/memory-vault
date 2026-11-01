@@ -30,3 +30,4 @@ langchain-text-splitters
 langchain-huggingface
 sentence-transformers
 qdrant-client
+boto3

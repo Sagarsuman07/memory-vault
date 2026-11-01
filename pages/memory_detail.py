@@ -1,5 +1,4 @@
-import os
-import base64
+import html
 import mimetypes
 
 import streamlit as st
@@ -13,6 +12,8 @@ from memory.memory_service import (
     update_memory,
     delete_memory,
 )
+
+from storage.file_store import generate_signed_url
 
 
 # ============================================================
@@ -191,92 +192,54 @@ with st.container(border=True):
 
 content_col, summary_col = st.columns([1, 1])
 
-file_path = memory["file_path"]
+file_key = memory.get("original_file_key") or memory.get("file_path")
 memory_type = memory["memory_type"]
+file_url = generate_signed_url(file_key) if file_key else None
+download_url = generate_signed_url(file_key, download_filename=memory["file_name"]) if file_key else None
+safe_file_name = html.escape(memory["file_name"])
 
 with content_col:
     with st.container(border=True, height=BOX_HEIGHT, key="memory_content_box"):
-
-        if memory_type == "image":
-            if os.path.exists(file_path):
-                st.image(file_path, use_container_width=True)
-            else:
-                st.error("The original image file is missing.")
-
+        if not file_url:
+            st.error("The original file is unavailable.")
+        elif memory_type == "image":
+            st.image(file_url, use_container_width=True)
         elif memory_type == "audio":
-            if os.path.exists(file_path):
-
-                # Approximate rendered height of Streamlit's native
-                # audio widget (the player bar itself, no extra chrome).
-                AUDIO_WIDGET_HEIGHT = 110
-
-                spacer_height = max(
-                    (BOX_HEIGHT - AUDIO_WIDGET_HEIGHT) // 2,
-                    1,
-                )
-
-                # Invisible top spacer — border=False means no
-                # visible box, just empty vertical space.
-                st.container(
-                    height=spacer_height,
-                    border=False,
-                    key="audio_spacer_top",
-                )
-
-                st.audio(file_path)
-
-                # Invisible bottom spacer — keeps the player
-                # centered regardless of BOX_HEIGHT changes.
-                st.container(
-                    height=spacer_height,
-                    border=False,
-                    key="audio_spacer_bottom",
-                )
-
-            else:
-                st.error("The original audio file is missing.")
-
+            AUDIO_WIDGET_HEIGHT = 110
+            spacer_height = max((BOX_HEIGHT - AUDIO_WIDGET_HEIGHT) // 2, 1)
+            st.container(height=spacer_height, border=False, key="audio_spacer_top")
+            st.audio(file_url)
+            st.container(height=spacer_height, border=False, key="audio_spacer_bottom")
         elif memory_type == "document":
-            if os.path.exists(file_path):
-                mime_type, _ = mimetypes.guess_type(file_path)
-                mime_type = mime_type or "application/octet-stream"
-
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
-
-                b64_data = base64.b64encode(file_bytes).decode("utf-8")
-                data_uri = f"data:{mime_type};base64,{b64_data}"
-
-                if mime_type == "application/pdf":
-                    st.markdown(
-                        f"""
-                        <a href="{data_uri}" download="{memory['file_name']}" class="doc-preview-link">
-                            <iframe src="{data_uri}"
-                                style="width:100%; height:380px; border:none; border-radius:8px;">
-                            </iframe>
-                            <div style="text-align:center; margin-top:6px; font-size:0.85rem; opacity:0.75;">
-                                📄 {memory['file_name']} — click to download
-                            </div>
-                        </a>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(
-                        f"""
-                        <a href="{data_uri}" download="{memory['file_name']}" class="doc-preview-link">
-                            <div class="doc-preview-box">
-                                <div style="font-size:2.5rem;">📄</div>
-                                <div style="margin-top:8px;">{memory['file_name']}</div>
-                                <div style="font-size:0.8rem; opacity:0.65;">Click to download</div>
-                            </div>
-                        </a>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+            mime_type, _ = mimetypes.guess_type(memory["file_name"])
+            mime_type = mime_type or "application/octet-stream"
+            if mime_type == "application/pdf":
+                st.markdown(
+                    f"""
+                    <a href="{download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
+                        <iframe src="{file_url}"
+                            style="width:100%; height:380px; border:none; border-radius:8px;">
+                        </iframe>
+                        <div style="text-align:center; margin-top:6px; font-size:0.85rem; opacity:0.75;">
+                            📄 {safe_file_name} — click to download
+                        </div>
+                    </a>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
-                st.error("The original document file is missing.")
-
+                st.markdown(
+                    f"""
+                    <a href="{download_url}" target="_blank" rel="noopener noreferrer" class="doc-preview-link">
+                        <div class="doc-preview-box">
+                            <div style="font-size:2.5rem;">📄</div>
+                            <div style="margin-top:8px;">{safe_file_name}</div>
+                            <div style="font-size:0.8rem; opacity:0.65;">Click to download</div>
+                        </div>
+                    </a>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
             st.info("No original file is available for this memory type.")
 

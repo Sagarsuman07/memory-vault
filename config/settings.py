@@ -46,6 +46,14 @@ class Settings:
 
     DATABASE_URL = _read_secret.__func__("DATABASE_URL")
 
+    # Cloudflare R2 private object storage
+    R2_ACCOUNT_ID = _read_secret.__func__("R2_ACCOUNT_ID")
+    R2_ACCESS_KEY_ID = _read_secret.__func__("R2_ACCESS_KEY_ID")
+    R2_SECRET_ACCESS_KEY = _read_secret.__func__("R2_SECRET_ACCESS_KEY")
+    R2_BUCKET_NAME = _read_secret.__func__("R2_BUCKET_NAME")
+    R2_ENDPOINT_URL = _read_secret.__func__("R2_ENDPOINT_URL")
+    MAX_UPLOAD_SIZE_BYTES = int(_read_secret.__func__("MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024)))
+
     DB_POOL_MIN_SIZE = int(_read_secret.__func__("DB_POOL_MIN_SIZE", "1"))
     DB_POOL_MAX_SIZE = int(_read_secret.__func__("DB_POOL_MAX_SIZE", "3"))
     DB_POOL_TIMEOUT_SECONDS = float(
@@ -265,6 +273,8 @@ class Settings:
     )
 
     def validate_knowledge_base_settings(self):
+        if self.MAX_UPLOAD_SIZE_BYTES <= 0:
+            raise ValueError("MAX_UPLOAD_SIZE_BYTES must be greater than zero")
         if self.CHUNK_SIZE <= 0:
             raise ValueError("CHUNK_SIZE must be greater than zero")
         if self.CHUNK_OVERLAP < 0 or self.CHUNK_OVERLAP >= self.CHUNK_SIZE:

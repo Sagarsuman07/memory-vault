@@ -19,7 +19,6 @@ from config.logging_config import StageTimer, get_logger, log_context, log_event
 from config.settings import settings
 from database.repositories import (
     get_memory,
-    update_memory_extracted_text,
     get_preparation_job,
     list_preparation_jobs,
     transition_preparation_job,
@@ -27,6 +26,7 @@ from database.repositories import (
     update_ingestion_source,
 )
 from memory.memory_models import JobStatus, PipelineStage, PreparationErrorCategory
+from storage.file_store import build_memory_object_key, download_to_temp, file_exists, upload_text
 
 logger = get_logger(__name__)
 
@@ -49,9 +49,15 @@ def _memory_row(memory_id: str, user_id: str):
     return get_memory(memory_id, user_id)
 
 
-def _save_extracted_text(memory_id: str, user_id: str, text: str) -> None:
-    if not update_memory_extracted_text(memory_id, user_id, text):
+def _save_extracted_text(memory_id: str, user_id: str, text: str) -> str:
+    key = build_memory_object_key(user_id, memory_id, "extracted", "content.txt")
+    upload_text(text, key)
+    from database.repositories import update_memory_extracted_text_key
+    if not update_memory_extracted_text_key(memory_id, user_id, key):
+        from storage.file_store import delete_file
+        delete_file(key)
         raise LookupError("Memory record was not found while saving extracted content.")
+    return key
 
 
 def _classify_error(stage: PipelineStage) -> tuple[PreparationErrorCategory, str]:
@@ -134,12 +140,12 @@ def _process_preparation_job_impl(job_id: str, user_id: str) -> bool:
             row = _memory_row(job.memory_id, user_id)
             if row is None:
                 raise FileNotFoundError("Memory record is missing.")
-            source_path = Path(row["file_path"])
-            file_label = source_path.name
+            source_key = row.get("original_file_key") or row.get("file_path")
+            file_label = row.get("file_name") or "source"
             log_event(logger, "INGEST_JOB_START", job=job_id, memory=job.memory_id, user=user_id,
                       file=file_label, attempt=attempt_number, queue_wait_seconds=queue_wait)
-            if not source_path.is_file():
-                raise FileNotFoundError("Stored source file is missing.")
+            if not source_key or not file_exists(source_key):
+                raise FileNotFoundError("Stored source object is missing.")
 
             # ---- Duplicate check: reuse a completed identical memory when safe. ----
             reuse = None
@@ -190,7 +196,7 @@ def _process_preparation_job_impl(job_id: str, user_id: str) -> bool:
                     user_id,
                     status="loaded",
                     memory_id=job.memory_id,
-                    stored_file_path=str(source_path),
+                    stored_file_path=source_key,
                     error_category=None,
                     error_message=None,
                 )
@@ -204,7 +210,8 @@ def _process_preparation_job_impl(job_id: str, user_id: str) -> bool:
             stage = PipelineStage.EXTRACTION
             from ingestion.processing import process_content
             with StageTimer(logger, "extraction", file=file_label) as timer:
-                processed = process_content(source_path)
+                with download_to_temp(source_key, suffix=Path(file_label).suffix) as source_path:
+                    processed = process_content(source_path)
                 if not processed.text.strip():
                     raise ValueError("No usable text was extracted.")
                 _save_extracted_text(job.memory_id, user_id, processed.text)
@@ -266,7 +273,7 @@ def _process_preparation_job_impl(job_id: str, user_id: str) -> bool:
                 user_id,
                 status="loaded",
                 memory_id=job.memory_id,
-                stored_file_path=str(source_path),
+                stored_file_path=source_key,
                 error_category=None,
                 error_message=None,
             )

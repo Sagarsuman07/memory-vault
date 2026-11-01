@@ -68,7 +68,7 @@ def _find_candidates(user_id: str, sha256: str, exclude_memory_id: str) -> tuple
                JOIN memories m ON m.id = s.memory_id AND m.user_id = s.user_id
                WHERE s.user_id = ? AND s.sha256 = ? AND s.status = 'loaded'
                  AND s.memory_id IS NOT NULL AND s.memory_id != ? AND s.source_id != ?
-                 AND m.legacy_extracted_text IS NOT NULL AND TRIM(m.legacy_extracted_text) != ''
+                 AND (m.extracted_text_key IS NOT NULL OR m.legacy_extracted_text IS NOT NULL)
                ORDER BY s.created_at ASC LIMIT ?""",
             (user_id, sha256, exclude_memory_id, exclude_memory_id, _MAX_CANDIDATES),
         ).fetchall()
@@ -106,7 +106,11 @@ def _validate_and_clone(candidate: dict[str, Any], *, target_memory_id: str, use
     memory = get_memory(source_id, user_id)               # scoped to this user
     if memory is None:
         raise _Ineligible("candidate_memory_missing")
-    text = memory["extracted_text"]
+    if memory.get("extracted_text_key"):
+        from storage.file_store import download_text
+        text = download_text(memory["extracted_text_key"])
+    else:
+        text = memory.get("extracted_text")
     if not isinstance(text, str) or not text.strip():
         raise _Ineligible("candidate_text_missing")
     if memory["memory_type"] != memory_type:

@@ -14,7 +14,7 @@ def _memory_from_row(row):
     if row is None:
         return None
     result = dict(row)
-    result["file_path"] = result.get("legacy_file_path") or result.get("file_path")
+    result["file_path"] = result.get("original_file_key") or result.get("legacy_file_path") or result.get("file_path")
     result["extracted_text"] = result.get("legacy_extracted_text") or result.get("extracted_text")
     result["created_at"] = _iso(result.get("created_at"))
     result["updated_at"] = _iso(result.get("updated_at"))
@@ -34,8 +34,8 @@ def create_memory(memory: Memory):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 memory.id, memory.user_id, memory.memory_type, memory.title,
-                memory.file_name, getattr(memory, "original_file_key", None),
-                getattr(memory, "extracted_text_key", None), memory.file_path,
+                memory.file_name, getattr(memory, "original_file_key", None) or memory.file_path,
+                getattr(memory, "extracted_text_key", None), None,
                 memory.extracted_text, memory.summary, memory.created_at,
                 memory.updated_at,
             ),
@@ -52,9 +52,7 @@ def get_memory(memory_id: str, user_id: str):
     connection = get_connection()
     try:
         row = connection.execute(
-            """SELECT *, legacy_file_path AS file_path,
-                      legacy_extracted_text AS extracted_text
-               FROM memories WHERE id = ? AND user_id = ?""",
+            """SELECT * FROM memories WHERE id = ? AND user_id = ?""",
             (memory_id, user_id),
         ).fetchone()
         return _memory_from_row(row)
@@ -66,8 +64,9 @@ def get_all_memories(user_id: str):
     connection = get_connection()
     try:
         rows = connection.execute(
-            """SELECT *, legacy_file_path AS file_path,
-                      legacy_extracted_text AS extracted_text
+            """SELECT id, user_id, memory_type, title, file_name,
+                      original_file_key, extracted_text_key, legacy_file_path,
+                      summary, created_at, updated_at
                FROM memories WHERE user_id = ? ORDER BY created_at DESC""",
             (user_id,),
         ).fetchall()
@@ -653,6 +652,25 @@ def update_memory_extracted_text(memory_id: str, user_id: str, text: str) -> boo
                       updated_at = CURRENT_TIMESTAMP
                WHERE id = ? AND user_id = ?""",
             (text, memory_id, user_id),
+        )
+        connection.commit()
+        return cursor.rowcount == 1
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def update_memory_extracted_text_key(memory_id: str, user_id: str, key: str | None) -> bool:
+    """Persist an R2 object key without storing extracted content in PostgreSQL."""
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            """UPDATE memories SET extracted_text_key = ?, legacy_extracted_text = NULL,
+                      updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND user_id = ?""",
+            (key, memory_id, user_id),
         )
         connection.commit()
         return cursor.rowcount == 1

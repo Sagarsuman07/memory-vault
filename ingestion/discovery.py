@@ -135,11 +135,11 @@ def discover_upload(
     file_name: str,
     data: bytes,
     *,
-    upload_dir: str | Path,
+    upload_dir: str | Path | None = None,
     source_id: Optional[str] = None,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
 ) -> SourceDescriptor:
-    """Validate an uploaded filename and its bytes before writing it to disk."""
+    """Validate uploaded filename and bytes without requiring a local destination."""
     if not isinstance(file_name, str) or not file_name.strip():
         raise SourceValidationError("The uploaded file must have a filename.")
     # Prevent path traversal and keep only the user-supplied basename.
@@ -160,13 +160,13 @@ def discover_upload(
         raise SourceValidationError(f"File size cannot exceed {max_file_size // (1024 * 1024)} MB.")
     _validate_signature(extension, file_bytes, safe_name)
     source_id = source_id or str(uuid4())
-    target_path = Path(upload_dir) / f"{source_id}{extension}"
+    target_path = Path(upload_dir) / f"{source_id}{extension}" if upload_dir is not None else None
     return SourceDescriptor(
         source_id=source_id,
         file_name=safe_name,
         extension=extension,
         media_type=get_media_type(safe_name),
-        file_path=str(target_path),
+        file_path=str(target_path) if target_path is not None else None,
         size_bytes=len(file_bytes),
         sha256=sha256(file_bytes).hexdigest(),
     )
