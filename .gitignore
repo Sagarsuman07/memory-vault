@@ -1,6 +1,10 @@
 .venv/
-mvenv
+venv/
+mvenv/
 .env
+env/
+.env.*
+!.env.example
 Documentation
 __pycache__/
 *.pyc
