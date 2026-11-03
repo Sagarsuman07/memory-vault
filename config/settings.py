@@ -273,6 +273,18 @@ class Settings:
     )
 
     def validate_knowledge_base_settings(self):
+        if self.DB_POOL_MIN_SIZE < 0:
+            raise ValueError("DB_POOL_MIN_SIZE cannot be negative")
+        if self.DB_POOL_MAX_SIZE <= 0:
+            raise ValueError("DB_POOL_MAX_SIZE must be greater than zero")
+        if self.DB_POOL_MIN_SIZE > self.DB_POOL_MAX_SIZE:
+            raise ValueError("DB_POOL_MIN_SIZE cannot exceed DB_POOL_MAX_SIZE")
+        if self.DB_POOL_TIMEOUT_SECONDS <= 0:
+            raise ValueError("DB_POOL_TIMEOUT_SECONDS must be greater than zero")
+        if self.DB_CONNECT_TIMEOUT_SECONDS <= 0:
+            raise ValueError("DB_CONNECT_TIMEOUT_SECONDS must be greater than zero")
+        if self.DB_STATEMENT_TIMEOUT_MS <= 0:
+            raise ValueError("DB_STATEMENT_TIMEOUT_MS must be greater than zero")
         if self.MAX_UPLOAD_SIZE_BYTES <= 0:
             raise ValueError("MAX_UPLOAD_SIZE_BYTES must be greater than zero")
         if self.CHUNK_SIZE <= 0:

@@ -253,8 +253,9 @@ def transition_preparation_job(
     error_category: PreparationErrorCategory | str | None = None,
     error_message: str | None = None,
 ) -> PreparationJob:
-    """Apply a validated lifecycle transition atomically.
+    """Apply a validated lifecycle transition atomically under a row-level lock.
 
+    The lock prevents competing workers from claiming the same queued job.
     Pass only a sanitized diagnostic message; never pass credentials, raw file
     content, or environment-variable values as error_message.
     """
@@ -266,7 +267,7 @@ def transition_preparation_job(
     try:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         if row is None:
@@ -356,7 +357,7 @@ def update_preparation_job_progress(
     try:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM preparation_jobs WHERE id = ? AND user_id = ? FOR UPDATE",
             (job_id, user_id),
         ).fetchone()
         if row is None:
