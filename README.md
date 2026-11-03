@@ -46,6 +46,25 @@ mvenv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
 streamlit run app.py
+```
+
+## Private demo access and low-memory deployment
+
+Set `APP_ACCESS_PASSWORD` in Streamlit secrets or the environment before
+starting the app. Every Streamlit page checks this password before connecting
+to PostgreSQL, Qdrant, or the ingestion worker. The app intentionally fails
+closed when the password is missing. This is a shared private-demo password,
+not per-user authentication; the initial version still uses `DEMO_USER_ID`.
+
+For small Streamlit deployments, ingestion and PDF OCR default to one worker.
+Embeddings are generated in small batches and sent to Qdrant without retaining
+the complete embedding matrix. Dashboard memory cards are fetched 20 at a time.
+The worker is process-local and recovers interrupted jobs on startup; run only
+one app replica. The `lease_expires_at` column is reserved for a future
+multi-worker deployment and is not currently used for heartbeat recovery.
+
+Use `QDRANT_COLLECTION_NAME` for the collection setting. The older
+`QDRANT_COLLECTION` name remains a backward-compatible fallback.
 
 ## Supabase PostgreSQL configuration
 
