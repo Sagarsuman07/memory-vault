@@ -300,6 +300,7 @@ def _replace_memory_points(
     memory_id: str,
     points: Iterable[models.PointStruct],
     expected_count: int,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Upsert bounded batches, then remove stale points for this memory."""
     started = time.perf_counter()
@@ -317,9 +318,14 @@ def _replace_memory_points(
                 point_ids.add(point.id)
                 batch.append(point)
                 if len(batch) >= UPSERT_BATCH_SIZE:
+                    if progress_callback:
+                        progress_callback("indexing")
+                        progress_callback = None
                     client.upsert(COLLECTION_NAME, points=batch, wait=True)
                     batch = []
             if batch:
+                if progress_callback:
+                    progress_callback("indexing")
                 client.upsert(COLLECTION_NAME, points=batch, wait=True)
 
             if len(point_ids) != expected_count:
@@ -409,8 +415,6 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
         for start, vectors in _embed_batches(
             texts, embedder, batch_size, settings.EMBEDDING_DIMENSION
         ):
-            if progress_callback and start == 0:
-                progress_callback("indexing")
             for offset, vector in enumerate(vectors):
                 index = start + offset
                 yield _make_point(
@@ -419,7 +423,10 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
                 )
 
     # Embeddings flow directly into the bounded Qdrant upsert buffer.
-    _replace_memory_points(client, memory_id, iter_points(), expected_count=len(chunks))
+    _replace_memory_points(
+        client, memory_id, iter_points(), expected_count=len(chunks),
+        progress_callback=progress_callback,
+    )
     return len(chunks)
 
 
