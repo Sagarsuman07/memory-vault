@@ -254,65 +254,67 @@ with summary_col:
     with st.container(border=True, height=BOX_HEIGHT, key="memory_summary_box"):
         st.subheader("Summary")
 
-        with st.container(height=SUMMARY_INNER_HEIGHT, key="memory_summary_inner"):
-            if memory["summary"]:
+        if memory["summary"]:
+            with st.container(height=SUMMARY_INNER_HEIGHT, key="memory_summary_inner"):
                 st.write(memory["summary"])
-            else:
-                st.caption("No summary has been generated yet.")
+        else:
+            # Keep the action outside the nested scrollable summary body.
+            # This ensures the button remains visible and directly clickable.
+            st.caption("No summary has been generated yet.")
 
-                if st.button(
-                    "Generate Summary",
-                    type="primary",
-                    key=f"generate_summary_{memory['id']}",
+            if st.button(
+                "Generate Summary",
+                type="primary",
+                key=f"generate_summary_{memory['id']}",
+            ):
+                # Do not generate a summary until background ingestion and
+                # indexing have completed successfully for this memory.
+                connection = get_connection()
+                try:
+                    preparation_job = connection.execute(
+                        """
+                        SELECT status, current_stage
+                        FROM preparation_jobs
+                        WHERE memory_id = ? AND user_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (memory["id"], USER_ID),
+                    ).fetchone()
+                finally:
+                    connection.close()
+
+                if preparation_job is not None and (
+                    preparation_job["status"] != "succeeded"
+                    or preparation_job["current_stage"] != "complete"
                 ):
-                    # Do not generate a summary until background ingestion and
-                    # indexing have completed successfully for this memory.
-                    connection = get_connection()
-                    try:
-                        preparation_job = connection.execute(
-                            """
-                            SELECT status, current_stage
-                            FROM preparation_jobs
-                            WHERE memory_id = ? AND user_id = ?
-                            ORDER BY created_at DESC, id DESC
-                            LIMIT 1
-                            """,
-                            (memory["id"], USER_ID),
-                        ).fetchone()
-                    finally:
-                        connection.close()
-
-                    if preparation_job is not None and (
-                        preparation_job["status"] != "succeeded"
-                        or preparation_job["current_stage"] != "complete"
-                    ):
-                        if preparation_job["status"] == "failed":
-                            st.warning(
-                                "Knowledge base preparation failed for this memory. "
-                                "Please resolve the ingestion issue and try again "
-                                "after preparation has completed."
-                            )
-                        else:
-                            st.info(
-                                "Memory ingestion and indexing are still in progress. "
-                                "Please try again once knowledge base preparation is completed."
-                            )
+                    if preparation_job["status"] == "failed":
+                        st.warning(
+                            "Knowledge base preparation failed for this memory. "
+                            "Please resolve the ingestion issue and try again "
+                            "after preparation has completed."
+                        )
                     else:
-                        try:
-                            with st.spinner("Generating title and summary..."):
-                                generate_memory_summary(
-                                    memory_id=memory["id"],
-                                    user_id=USER_ID,
-                                )
-
-                            st.toast(
-                                "AI title and summary generated successfully.",
-                                icon="✅",
+                        st.info(
+                            "Memory ingestion and indexing are still in progress. "
+                            "Please try again once knowledge base preparation is completed."
+                        )
+                else:
+                    try:
+                        with st.spinner("Generating title and summary..."):
+                            generate_memory_summary(
+                                memory_id=memory["id"],
+                                user_id=USER_ID,
                             )
-                            st.rerun()
 
-                        except Exception as error:
-                            st.toast(str(error), icon="❌")
+                        st.toast(
+                            "AI title and summary generated successfully.",
+                            icon="✅",
+                        )
+                        st.rerun()
+
+                    except Exception as error:
+                        st.toast(str(error), icon="❌")
 
 
 # ============================================================
