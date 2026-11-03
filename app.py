@@ -8,6 +8,7 @@ from agent.graph import (
 from config.settings import settings
 from database.database import initialize_database
 from memory.background_worker import start_background_worker
+from rag.vector_store import get_client as initialize_qdrant
 
 from memory.memory_service import (
     list_memories,
@@ -28,6 +29,7 @@ st.set_page_config(
 
 initialize_database()
 initialize_checkpointer()
+initialize_qdrant()
 start_background_worker()
 
 USER_ID = settings.DEMO_USER_ID

@@ -283,15 +283,6 @@ def get_memory_by_id(
     return memory
 
 
-def get_memory_extracted_text(memory_id: str, user_id: str) -> str | None:
-    """Retrieve extracted content from R2 only when explicitly needed."""
-    memory = get_memory(memory_id, user_id)
-    if memory is None:
-        raise ValueError("Memory not found.")
-    key = memory.get("extracted_text_key")
-    return download_text(key) if key else memory.get("extracted_text")
-
-
 # ============================================================
 # List Memories
 # ============================================================

@@ -23,7 +23,7 @@ import uuid
 import zlib
 from collections import Counter
 from numbers import Real
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from langchain_core.documents import Document
 from qdrant_client import QdrantClient, models
@@ -46,8 +46,7 @@ BM25_K1 = 1.2
 BM25_B = 0.75
 BM25_AVG_DOC_LEN = 170.0
 
-# One process-wide lock for every Qdrant call. It is required by the embedded
-# local mode (not thread-safe) and harmless for a Qdrant server.
+# Serialize Qdrant writes and collection operations within this app process.
 QDRANT_LOCK = threading.RLock()
 _CLIENT_LOCK = threading.Lock()
 _CLIENT: QdrantClient | None = None
@@ -61,7 +60,7 @@ _EMBEDDING_LOCK = threading.Semaphore(
 # ============================================================
 
 def _ensure_collection(client: QdrantClient) -> None:
-    """Create the collection if missing; refuse an incompatible existing one."""
+    """Create or validate the hybrid collection and its filter indexes."""
     size = settings.EMBEDDING_DIMENSION
     if client.collection_exists(COLLECTION_NAME):
         params = client.get_collection(COLLECTION_NAME).config.params
@@ -70,50 +69,70 @@ def _ensure_collection(client: QdrantClient) -> None:
             raise RuntimeError(
                 f"Qdrant collection '{COLLECTION_NAME}' does not have a "
                 f"'{DENSE_VECTOR}' vector of size {size}. Use another QDRANT_COLLECTION "
-                "or delete the existing collection."
+                "or migrate the existing collection."
             )
         if SPARSE_VECTOR not in (params.sparse_vectors or {}):
             raise RuntimeError(
                 f"Qdrant collection '{COLLECTION_NAME}' has no '{SPARSE_VECTOR}' sparse vector."
             )
-        return
+    else:
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config={
+                DENSE_VECTOR: models.VectorParams(
+                    size=size, distance=models.Distance.COSINE
+                )
+            },
+            sparse_vectors_config={
+                SPARSE_VECTOR: models.SparseVectorParams(
+                    modifier=models.Modifier.IDF
+                )
+            },
+        )
 
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config={DENSE_VECTOR: models.VectorParams(size=size, distance=models.Distance.COSINE)},
-        sparse_vectors_config={SPARSE_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)},
-    )
-    # Payload indexes speed up the user/memory filters on a server. The embedded
-    # local mode does not use them.
-    if settings.QDRANT_URL:
-        for field in ("user_id", "memory_id"):
-            client.create_payload_index(COLLECTION_NAME, field_name=field,
-                                        field_schema=models.PayloadSchemaType.KEYWORD)
+    # Existing collections may predate these indexes. Ensure both filters
+    # are indexed before the app starts serving user-scoped retrieval.
+    payload_schema = client.get_collection(COLLECTION_NAME).payload_schema or {}
+    for field in ("user_id", "memory_id"):
+        if field not in payload_schema:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field,
+                field_schema=models.PayloadSchemaType.KEYWORD,
+                wait=True,
+            )
 
 
 def get_client() -> QdrantClient:
-    """Return the shared Qdrant client (created once, collection ensured)."""
+    """Return the shared Qdrant Cloud client (created once, collection ensured)."""
     global _CLIENT
     if _CLIENT is None:
         with timed_lock(logger, _CLIENT_LOCK, "qdrant_client", "construct_client"):
             if _CLIENT is None:
                 started = time.perf_counter()
                 try:
-                    if settings.QDRANT_URL:
-                        client = QdrantClient(url=settings.QDRANT_URL,
-                                              api_key=settings.QDRANT_API_KEY, timeout=30)
-                    else:
-                        client = QdrantClient(path=settings.QDRANT_PATH)
+                    settings.validate_qdrant_cloud_settings()
+                    client = QdrantClient(
+                        url=settings.QDRANT_URL,
+                        api_key=settings.QDRANT_API_KEY,
+                        timeout=30,
+                    )
                     with QDRANT_LOCK:
                         _ensure_collection(client)
                 except Exception as error:
-                    log_event(logger, "INGEST_COMPONENT_INITIALIZATION", logging.WARNING,
-                              component="qdrant_client", status="error",
-                              error=type(error).__name__, seconds=time.perf_counter() - started)
+                    log_event(
+                        logger, "INGEST_COMPONENT_INITIALIZATION", logging.WARNING,
+                        component="qdrant_client", status="error",
+                        error=type(error).__name__,
+                        seconds=time.perf_counter() - started,
+                    )
                     raise
                 _CLIENT = client
-                log_event(logger, "INGEST_COMPONENT_INITIALIZATION", component="qdrant_client",
-                          status="success", seconds=time.perf_counter() - started)
+                log_event(
+                    logger, "INGEST_COMPONENT_INITIALIZATION",
+                    component="qdrant_client", status="success",
+                    seconds=time.perf_counter() - started,
+                )
     return _CLIENT
 
 
@@ -239,18 +258,27 @@ def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
     return result
 
 
-def _scroll(client: QdrantClient, flt: models.Filter, *, with_payload: bool = False,
-            with_vectors: bool | list[str] = False) -> list:
-    """Return every point matching ``flt``."""
-    points: list = []
+def _iter_scroll(client: QdrantClient, flt: models.Filter, *,
+                with_payload: bool = False,
+                with_vectors: bool | list[str] = False):
+    """Yield scroll pages so callers can avoid retaining every Qdrant point."""
     offset = None
     while True:
-        batch, offset = client.scroll(COLLECTION_NAME, scroll_filter=flt, limit=256,
-                                      offset=offset, with_payload=with_payload,
-                                      with_vectors=with_vectors)
-        points.extend(batch)
+        batch, offset = client.scroll(
+            COLLECTION_NAME, scroll_filter=flt, limit=256, offset=offset,
+            with_payload=with_payload, with_vectors=with_vectors,
+        )
+        yield from batch
         if offset is None:
-            return points
+            break
+
+
+def _scroll(client: QdrantClient, flt: models.Filter, *,
+            with_payload: bool = False,
+            with_vectors: bool | list[str] = False) -> list:
+    return list(_iter_scroll(
+        client, flt, with_payload=with_payload, with_vectors=with_vectors
+    ))
 
 
 def _make_point(memory_id: str, user_id: str, memory_type: str, index: int, text: str,
@@ -264,49 +292,84 @@ def _make_point(memory_id: str, user_id: str, memory_type: str, index: int, text
                               vector={DENSE_VECTOR: dense, SPARSE_VECTOR: sparse_document(text)})
 
 
-def _replace_memory_points(client: QdrantClient, memory_id: str,
-                           points: list[models.PointStruct]) -> None:
-    """Write the memory's points, drop stale ones, verify the count.
-
-    Point IDs are deterministic, so a retry/re-index overwrites in place. If the
-    write fails, points created by this attempt are removed again.
-    """
-    ids = [p.id for p in points]
+def _replace_memory_points(
+    client: QdrantClient,
+    memory_id: str,
+    points: Iterable[models.PointStruct],
+    expected_count: int,
+) -> None:
+    """Upsert bounded batches, then remove stale points for this memory."""
     started = time.perf_counter()
-    with timed_lock(logger, QDRANT_LOCK, "qdrant", "replace_memory_index",
-                    memory=memory_id, chunks=len(ids)):
-        previous = {p.id for p in _scroll(client, memory_filter(memory_id))}
+    with timed_lock(
+        logger, QDRANT_LOCK, "qdrant", "replace_memory_index",
+        memory=memory_id, chunks=expected_count,
+    ):
+        previous = {
+            point.id for point in _iter_scroll(client, memory_filter(memory_id))
+        }
+        point_ids = set()
+        batch = []
         try:
-            for start in range(0, len(points), UPSERT_BATCH_SIZE):
-                client.upsert(COLLECTION_NAME, points=points[start:start + UPSERT_BATCH_SIZE],
-                              wait=True)
-            stale = list(previous - set(ids))
-            if stale:
-                client.delete(COLLECTION_NAME, points_selector=models.PointIdsList(points=stale),
-                              wait=True)
-            actual = client.count(COLLECTION_NAME, count_filter=memory_filter(memory_id),
-                                  exact=True).count
-            if actual != len(ids):
+            for point in points:
+                point_ids.add(point.id)
+                batch.append(point)
+                if len(batch) >= UPSERT_BATCH_SIZE:
+                    client.upsert(COLLECTION_NAME, points=batch, wait=True)
+                    batch = []
+            if batch:
+                client.upsert(COLLECTION_NAME, points=batch, wait=True)
+
+            if len(point_ids) != expected_count:
                 raise RuntimeError(
-                    f"Qdrant verification failed: expected {len(ids)} chunks, found {actual}.")
-            log_event(logger, "INGEST_TIMING", stage="qdrant_indexing", memory=memory_id,
-                      seconds=time.perf_counter() - started, chunks=len(ids),
-                      stale_records=len(stale))
+                    f"Qdrant indexing produced {len(point_ids)} points; "
+                    f"expected {expected_count}."
+                )
+
+            stale = list(previous - point_ids)
+            if stale:
+                client.delete(
+                    COLLECTION_NAME,
+                    points_selector=models.PointIdsList(points=stale),
+                    wait=True,
+                )
+            actual = client.count(
+                COLLECTION_NAME,
+                count_filter=memory_filter(memory_id),
+                exact=True,
+            ).count
+            if actual != expected_count:
+                raise RuntimeError(
+                    f"Qdrant verification failed: expected {expected_count} "
+                    f"chunks, found {actual}."
+                )
+            log_event(
+                logger, "INGEST_TIMING", stage="qdrant_indexing",
+                memory=memory_id, seconds=time.perf_counter() - started,
+                chunks=expected_count, stale_records=len(stale),
+            )
         except Exception as error:
-            log_event(logger, "INGEST_QDRANT_INDEX_ERROR", logging.ERROR, memory=memory_id,
-                      error=type(error).__name__, chunks=len(ids),
-                      seconds=time.perf_counter() - started)
-            created = [i for i in ids if i not in previous]
+            log_event(
+                logger, "INGEST_QDRANT_INDEX_ERROR", logging.ERROR,
+                memory=memory_id, error=type(error).__name__,
+                chunks=len(point_ids), seconds=time.perf_counter() - started,
+            )
+            created = list(point_ids - previous)
             try:
                 if created:
-                    client.delete(COLLECTION_NAME,
-                                  points_selector=models.PointIdsList(points=created), wait=True)
+                    client.delete(
+                        COLLECTION_NAME,
+                        points_selector=models.PointIdsList(points=created),
+                        wait=True,
+                    )
             except Exception as cleanup_error:
-                log_event(logger, "INGEST_QDRANT_CLEANUP_ERROR", logging.CRITICAL,
-                          memory=memory_id, error=type(cleanup_error).__name__)
+                log_event(
+                    logger, "INGEST_QDRANT_CLEANUP_ERROR", logging.CRITICAL,
+                    memory=memory_id, error=type(cleanup_error).__name__,
+                )
                 raise RuntimeError(
                     "Indexing failed and cleanup also failed. Inspect Qdrant before retrying. "
-                    f"Indexing error: {error}; cleanup error: {cleanup_error}") from error
+                    f"Indexing error: {error}; cleanup error: {cleanup_error}"
+                ) from error
             raise
 
 
@@ -317,42 +380,49 @@ def _replace_memory_points(client: QdrantClient, memory_id: str,
 def index_memory(memory_id: str, user_id: str, memory_type: str,
                  chunks: list[Document],
                  progress_callback: Optional[Callable[[str], None]] = None) -> int:
-    """Embed chunks, then replace the memory's points in Qdrant. Returns the chunk count."""
-    if not memory_id or not memory_id.strip():
-        raise ValueError("Memory ID cannot be empty.")
-    if not user_id or not user_id.strip():
-        raise ValueError("User ID cannot be empty.")
-    if not memory_type or not memory_type.strip():
-        raise ValueError("Memory type cannot be empty.")
+    """Embed and index chunks in bounded Qdrant upsert batches."""
+    for name, value in (
+        ("memory_id", memory_id), ("user_id", user_id), ("memory_type", memory_type)
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} cannot be empty.")
     if not chunks:
         raise ValueError("Cannot index a memory with no chunks.")
 
-    texts, metadatas = [], []
-    for i, chunk in enumerate(chunks):
+    texts = []
+    for index, chunk in enumerate(chunks):
         text = getattr(chunk, "page_content", None)
         if not isinstance(text, str) or not text.strip():
-            raise ValueError(f"Chunk {i} has empty or invalid text.")
+            raise ValueError(f"Chunk {index} has empty or invalid text.")
         texts.append(text)
-        metadatas.append(_safe_metadata(getattr(chunk, "metadata", None)))
 
     batch_size = int(getattr(settings, "EMBEDDING_BATCH_SIZE", 32))
     client = get_client()
-
     if progress_callback:
         progress_callback("embedding")
-    # Local embedding runs outside the Qdrant lock so jobs can embed in parallel.
+
     embed_started = time.perf_counter()
-    vectors = _embed_batches(texts, get_embeddings(), batch_size, settings.EMBEDDING_DIMENSION)
-    log_event(logger, "INGEST_TIMING", stage="embedding", memory=memory_id,
-              seconds=time.perf_counter() - embed_started, chunks=len(texts),
-              dimension=len(vectors[0]))
+    vectors = _embed_batches(
+        texts, get_embeddings(), batch_size, settings.EMBEDDING_DIMENSION
+    )
+    log_event(
+        logger, "INGEST_TIMING", stage="embedding", memory=memory_id,
+        seconds=time.perf_counter() - embed_started, chunks=len(texts),
+        dimension=len(vectors[0]),
+    )
 
     if progress_callback:
         progress_callback("indexing")
-    points = [_make_point(memory_id, user_id, memory_type, i, texts[i], metadatas[i], vectors[i])
-              for i in range(len(texts))]
-    _replace_memory_points(client, memory_id, points)
-    return len(points)
+
+    points = (
+        _make_point(
+            memory_id, user_id, memory_type, index, texts[index],
+            _safe_metadata(getattr(chunks[index], "metadata", None)), vectors[index],
+        )
+        for index in range(len(chunks))
+    )
+    _replace_memory_points(client, memory_id, points, expected_count=len(chunks))
+    return len(chunks)
 
 
 def delete_memory_index(memory_id: str) -> None:
@@ -463,5 +533,5 @@ def clone_memory_index(*, source_memory_id: str, target_memory_id: str, user_id:
         points.append(_make_point(target_memory_id, user_id, memory_type, index,
                                   expected_text, payload, dense))
 
-    _replace_memory_points(client, target_memory_id, points)
+    _replace_memory_points(client, target_memory_id, points, expected_count=len(points))
     return len(points)

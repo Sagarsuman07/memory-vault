@@ -137,12 +137,9 @@ class Settings:
     # Qdrant (vector database)
     # ============================================================
 
-    # Set QDRANT_URL (+ QDRANT_API_KEY for Qdrant Cloud) to use a Qdrant
-    # server. If QDRANT_URL is empty, an embedded local database is stored
-    # in QDRANT_PATH (development only; single process).
-    QDRANT_URL = os.getenv("QDRANT_URL") or None
-    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
-    QDRANT_PATH = os.getenv("QDRANT_PATH", ".qdrant")
+    # Qdrant Cloud is required; there is deliberately no local fallback.
+    QDRANT_URL = _read_secret.__func__("QDRANT_URL")
+    QDRANT_API_KEY = _read_secret.__func__("QDRANT_API_KEY")
     QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "memory_vault")
 
     # Must match EMBEDDING_MODEL (all-MiniLM-L6-v2 produces 384 dimensions).
@@ -271,6 +268,15 @@ class Settings:
     PDF_OCR_RETRY_MAX_DELAY_SECONDS = float(
         os.getenv("PDF_OCR_RETRY_MAX_DELAY_SECONDS", "8")
     )
+
+    def validate_qdrant_cloud_settings(self):
+        if not self.QDRANT_URL or not self.QDRANT_API_KEY:
+            raise ValueError(
+                "QDRANT_URL and QDRANT_API_KEY are required. Configure both "
+                "Qdrant Cloud credentials in the environment or Streamlit secrets."
+            )
+        if not self.QDRANT_URL.startswith("https://"):
+            raise ValueError("QDRANT_URL must use HTTPS for Qdrant Cloud.")
 
     def validate_knowledge_base_settings(self):
         if self.DB_POOL_MIN_SIZE < 0:

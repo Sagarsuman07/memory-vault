@@ -54,6 +54,17 @@ class QdrantTestCase(unittest.TestCase):
 
 
 class IndexingTests(QdrantTestCase):
+    def test_collection_ensures_user_and_memory_payload_indexes(self):
+        info = self.client.get_collection(vs.COLLECTION_NAME)
+        self.assertIn("user_id", info.payload_schema)
+        self.assertIn("memory_id", info.payload_schema)
+
+    def test_existing_collection_missing_payload_index_is_repaired(self):
+        self.client.delete_payload_index(vs.COLLECTION_NAME, "user_id", wait=True)
+        self.assertNotIn("user_id", self.client.get_collection(vs.COLLECTION_NAME).payload_schema)
+        vs._ensure_collection(self.client)
+        self.assertIn("user_id", self.client.get_collection(vs.COLLECTION_NAME).payload_schema)
+
     def test_index_verify_and_metadata(self):
         chunks = docs("alpha one", "beta two", "gamma three",
                       source_page=3, memory_id="WRONG", user_id="WRONG")

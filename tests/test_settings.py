@@ -15,6 +15,26 @@ class KnowledgeBaseSettingsTests(unittest.TestCase):
         self.assertEqual(settings.INGESTION_MAX_ATTEMPTS, 3)
         self.assertEqual(settings.INGESTION_WORKER_CONCURRENCY, 2)
 
+    def test_qdrant_cloud_credentials_are_required(self):
+        config = Settings()
+        config.QDRANT_URL = None
+        config.QDRANT_API_KEY = None
+        with self.assertRaisesRegex(ValueError, "QDRANT_URL and QDRANT_API_KEY"):
+            config.validate_qdrant_cloud_settings()
+
+    def test_qdrant_cloud_requires_https(self):
+        config = Settings()
+        config.QDRANT_URL = "http://localhost:6333"
+        config.QDRANT_API_KEY = "test-key"
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            config.validate_qdrant_cloud_settings()
+
+    def test_qdrant_cloud_accepts_https_and_api_key(self):
+        config = Settings()
+        config.QDRANT_URL = "https://example.eu-central.aws.cloud.qdrant.io:6333"
+        config.QDRANT_API_KEY = "test-key"
+        config.validate_qdrant_cloud_settings()
+
     def test_database_pool_defaults_are_valid(self):
         config = Settings()
         config.validate_knowledge_base_settings()
