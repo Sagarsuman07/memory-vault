@@ -215,47 +215,50 @@ def _safe_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _embed_batches(texts: Sequence[str], embedder: Any, batch_size: int,
-                   existing_dimension: int | None = None) -> list[list[float]]:
-    """Generate embeddings in bounded batches and validate every vector."""
+                   existing_dimension: int | None = None) -> Iterable[tuple[int, list[list[float]]]]:
+    """Yield validated embedding batches to keep peak vector memory bounded."""
     if batch_size <= 0:
         raise ValueError("EMBEDDING_BATCH_SIZE must be greater than zero.")
     if not texts:
         raise ValueError("Cannot generate embeddings for an empty text list.")
-    result: list[list[float]] = []
+
     dimension = existing_dimension
     for start in range(0, len(texts), batch_size):
         batch = list(texts[start:start + batch_size])
-        batch_started = time.perf_counter()
-        batch_number = start // batch_size + 1
-        # Release the shared embedding slot after each batch, so a small memory
-        # can make progress between batches of a large memory.
+        started = time.perf_counter()
         try:
             with timed_lock(logger, _EMBEDDING_LOCK, "embedding", "embed_batch",
-                            batch=batch_number, items=len(batch)):
+                            batch=start // batch_size + 1, items=len(batch)):
                 raw = embedder.embed_documents(batch)
         except Exception as error:
             log_event(logger, "INGEST_EMBEDDING_BATCH_ERROR", logging.WARNING,
-                      batch=batch_number, start=start, items=len(batch),
-                      error=type(error).__name__, seconds=time.perf_counter() - batch_started)
+                      batch=start // batch_size + 1, start=start, items=len(batch),
+                      error=type(error).__name__, seconds=time.perf_counter() - started)
             raise
-        log_event(logger, "INGEST_EMBEDDING_BATCH_SUCCESS", batch=batch_number,
-                  start=start, items=len(batch), seconds=time.perf_counter() - batch_started)
+
         vectors = _as_list(raw)
         if len(vectors) != len(batch):
             raise ValueError("Embedding response count does not match input batch.")
+        validated = []
         for raw_vector in vectors:
             vector = _as_list(raw_vector)
-            if not vector:
-                raise ValueError("Embedding provider returned an empty vector.")
-            if any(isinstance(v, bool) or not isinstance(v, Real)
-                   or not math.isfinite(float(v)) for v in vector):
-                raise ValueError("Embedding vectors must contain only finite numeric values.")
+            if not vector or any(
+                isinstance(v, bool) or not isinstance(v, Real) or not math.isfinite(float(v))
+                for v in vector
+            ):
+                raise ValueError("Embedding vectors must contain finite numeric values.")
             if dimension is None:
                 dimension = len(vector)
             if len(vector) != dimension:
-                raise ValueError(f"Embedding dimension mismatch: expected {dimension}, received {len(vector)}.")
-            result.append([float(v) for v in vector])
-    return result
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {dimension}, received {len(vector)}."
+                )
+            validated.append([float(v) for v in vector])
+
+        log_event(logger, "INGEST_EMBEDDING_BATCH_SUCCESS",
+                  batch=start // batch_size + 1, start=start, items=len(batch),
+                  seconds=time.perf_counter() - started)
+        yield start, validated
 
 
 def _iter_scroll(client: QdrantClient, flt: models.Filter, *,
@@ -398,30 +401,25 @@ def index_memory(memory_id: str, user_id: str, memory_type: str,
 
     batch_size = int(getattr(settings, "EMBEDDING_BATCH_SIZE", 32))
     client = get_client()
+    embedder = get_embeddings()
     if progress_callback:
         progress_callback("embedding")
 
-    embed_started = time.perf_counter()
-    vectors = _embed_batches(
-        texts, get_embeddings(), batch_size, settings.EMBEDDING_DIMENSION
-    )
-    log_event(
-        logger, "INGEST_TIMING", stage="embedding", memory=memory_id,
-        seconds=time.perf_counter() - embed_started, chunks=len(texts),
-        dimension=len(vectors[0]),
-    )
+    def iter_points():
+        for start, vectors in _embed_batches(
+            texts, embedder, batch_size, settings.EMBEDDING_DIMENSION
+        ):
+            if progress_callback and start == 0:
+                progress_callback("indexing")
+            for offset, vector in enumerate(vectors):
+                index = start + offset
+                yield _make_point(
+                    memory_id, user_id, memory_type, index, texts[index],
+                    _safe_metadata(getattr(chunks[index], "metadata", None)), vector,
+                )
 
-    if progress_callback:
-        progress_callback("indexing")
-
-    points = (
-        _make_point(
-            memory_id, user_id, memory_type, index, texts[index],
-            _safe_metadata(getattr(chunks[index], "metadata", None)), vectors[index],
-        )
-        for index in range(len(chunks))
-    )
-    _replace_memory_points(client, memory_id, points, expected_count=len(chunks))
+    # Embeddings flow directly into the bounded Qdrant upsert buffer.
+    _replace_memory_points(client, memory_id, iter_points(), expected_count=len(chunks))
     return len(chunks)
 
 
@@ -437,36 +435,52 @@ def delete_memory_index(memory_id: str) -> None:
 
 
 def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None = None) -> dict[str, Any]:
-    """Return a diagnostic report for indexed records belonging to one memory."""
+    """Verify Qdrant pages incrementally without retaining all vector payloads."""
     if not memory_id or not memory_id.strip():
         raise ValueError("Memory ID cannot be empty.")
+
     client = get_client()
+    ids, seen_ids, dimensions, errors = [], set(), set(), []
+    record_count = 0
     with timed_lock(logger, QDRANT_LOCK, "qdrant", "verify_memory_index", memory=memory_id):
-        points = _scroll(client, memory_filter(memory_id), with_payload=True,
-                         with_vectors=[DENSE_VECTOR])
-    payloads = [p.payload or {} for p in points]
-    ids = [pl.get("chunk_id") for pl in payloads]
-    errors = []
-    if not points:
+        for point in _iter_scroll(
+            client, memory_filter(memory_id), with_payload=True,
+            with_vectors=[DENSE_VECTOR],
+        ):
+            record_count += 1
+            payload = point.payload or {}
+            chunk_id = payload.get("chunk_id")
+            ids.append(chunk_id)
+            if chunk_id in seen_ids:
+                errors.append("Duplicate record IDs were returned.")
+            seen_ids.add(chunk_id)
+            if payload.get("memory_id") != memory_id:
+                errors.append("A record has an incorrect memory_id.")
+
+            vector = _as_list((point.vector or {}).get(DENSE_VECTOR))
+            dimensions.add(len(vector))
+            if not vector:
+                errors.append("An indexed vector is missing.")
+
+            if expected_chunks is not None:
+                index = payload.get("chunk_index")
+                if not isinstance(index, int) or not 0 <= index < len(expected_chunks):
+                    errors.append("Indexed chunk positions do not match expected chunks.")
+                elif payload.get(TEXT_KEY) != expected_chunks[index].page_content:
+                    errors.append(f"Indexed text mismatch for chunk {index}.")
+
+    if record_count == 0:
         errors.append("No indexed records found for this memory.")
-    if len(ids) != len(set(ids)):
-        errors.append("Duplicate record IDs were returned.")
-    dimensions = {len((p.vector or {}).get(DENSE_VECTOR) or []) for p in points}
     if len(dimensions) > 1 or 0 in dimensions:
-        errors.append("Indexed vectors are missing or have inconsistent dimensions.")
-    if any(pl.get("memory_id") != memory_id for pl in payloads):
-        errors.append("A record has an incorrect memory_id.")
-    if expected_chunks is not None:
-        actual = {pl.get("chunk_id"): pl.get(TEXT_KEY) for pl in payloads}
-        expected_ids = [_chunk_id(memory_id, i) for i in range(len(expected_chunks))]
-        if set(actual) != set(expected_ids):
-            errors.append("Indexed IDs do not match expected chunk IDs.")
-        for record_id, chunk in zip(expected_ids, expected_chunks):
-            if actual.get(record_id) != chunk.page_content:
-                errors.append(f"Indexed text mismatch for {record_id}.")
-    return {"valid": not errors, "memory_id": memory_id, "record_count": len(points),
-            "embedding_dimension": next(iter(dimensions)) if len(dimensions) == 1 else None,
-            "errors": errors, "ids": ids}
+        errors.append("Indexed vectors have inconsistent dimensions.")
+    if expected_chunks is not None and record_count != len(expected_chunks):
+        errors.append("Indexed record count does not match expected chunks.")
+
+    return {
+        "valid": not errors, "memory_id": memory_id, "record_count": record_count,
+        "embedding_dimension": next(iter(dimensions)) if len(dimensions) == 1 else None,
+        "errors": list(dict.fromkeys(errors)), "ids": ids,
+    }
 
 
 # ============================================================

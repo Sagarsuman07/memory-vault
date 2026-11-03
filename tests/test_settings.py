@@ -13,7 +13,7 @@ class KnowledgeBaseSettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.EMBEDDING_BATCH_SIZE, 32)
         self.assertEqual(settings.INGESTION_MAX_ATTEMPTS, 3)
-        self.assertEqual(settings.INGESTION_WORKER_CONCURRENCY, 2)
+        self.assertEqual(settings.INGESTION_WORKER_CONCURRENCY, 1)
 
     def test_qdrant_cloud_credentials_are_required(self):
         config = Settings()

@@ -65,6 +65,24 @@ class IndexingTests(QdrantTestCase):
         vs._ensure_collection(self.client)
         self.assertIn("user_id", self.client.get_collection(vs.COLLECTION_NAME).payload_schema)
 
+    def test_indexing_embeds_in_bounded_batches(self):
+        calls = []
+
+        class TrackingEmbeddings(FakeEmbeddings):
+            def embed_documents(self, texts):
+                calls.append(len(texts))
+                return super().embed_documents(texts)
+
+        with patch.object(vs, "get_embeddings", return_value=TrackingEmbeddings()), \
+             patch.object(vs.settings, "EMBEDDING_BATCH_SIZE", 2):
+            vs.index_memory(
+                "batched", "u1", "document",
+                docs("first text", "second text", "third text", "fourth text", "fifth text"),
+            )
+
+        self.assertEqual(calls, [2, 2, 1])
+        self.assertTrue(vs.verify_memory_index("batched")["valid"])
+
     def test_index_verify_and_metadata(self):
         chunks = docs("alpha one", "beta two", "gamma three",
                       source_page=3, memory_id="WRONG", user_id="WRONG")

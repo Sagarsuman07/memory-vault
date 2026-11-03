@@ -140,7 +140,11 @@ class Settings:
     # Qdrant Cloud is required; there is deliberately no local fallback.
     QDRANT_URL = _read_secret.__func__("QDRANT_URL")
     QDRANT_API_KEY = _read_secret.__func__("QDRANT_API_KEY")
-    QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "memory_vault")
+    QDRANT_COLLECTION_NAME = _read_secret.__func__(
+        "QDRANT_COLLECTION_NAME",
+        _read_secret.__func__("QDRANT_COLLECTION", "memory_vault"),
+    )
+    QDRANT_COLLECTION = QDRANT_COLLECTION_NAME  # Backward-compatible alias.
 
     # Must match EMBEDDING_MODEL (all-MiniLM-L6-v2 produces 384 dimensions).
     EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "384"))
@@ -156,7 +160,7 @@ class Settings:
         os.getenv("INGESTION_RETRY_DELAY_SECONDS", "5")
     )
     INGESTION_WORKER_CONCURRENCY = int(
-        os.getenv("INGESTION_WORKER_CONCURRENCY", "2")
+        _read_secret.__func__("INGESTION_WORKER_CONCURRENCY", "1")
     )
 
     # Keep local embedding inference from running in several threads at once.
@@ -260,7 +264,7 @@ class Settings:
     PDF_OCR_MIN_PAGE_TEXT_CHARS = int(os.getenv("PDF_OCR_MIN_PAGE_TEXT_CHARS", "20"))
     # OCR page rendering stays serial; only independent vision calls are parallel.
     # Set PDF_OCR_WORKERS=1 for the sequential OCR fallback.
-    PDF_OCR_WORKERS = int(os.getenv("PDF_OCR_WORKERS", "3"))
+    PDF_OCR_WORKERS = int(_read_secret.__func__("PDF_OCR_WORKERS", "1"))
     PDF_OCR_MAX_RETRIES = int(os.getenv("PDF_OCR_MAX_RETRIES", "2"))
     PDF_OCR_RETRY_BASE_DELAY_SECONDS = float(
         os.getenv("PDF_OCR_RETRY_BASE_DELAY_SECONDS", "1")
