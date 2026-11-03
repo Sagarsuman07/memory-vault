@@ -447,7 +447,7 @@ def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None =
         raise ValueError("Memory ID cannot be empty.")
 
     client = get_client()
-    ids, seen_ids, dimensions, errors = [], set(), set(), []
+    ids, seen_ids, seen_indices, dimensions, errors = [], set(), set(), set(), []
     record_count = 0
     with timed_lock(logger, QDRANT_LOCK, "qdrant", "verify_memory_index", memory=memory_id):
         for point in _iter_scroll(
@@ -473,15 +473,24 @@ def verify_memory_index(memory_id: str, expected_chunks: list[Document] | None =
                 index = payload.get("chunk_index")
                 if not isinstance(index, int) or not 0 <= index < len(expected_chunks):
                     errors.append("Indexed chunk positions do not match expected chunks.")
-                elif payload.get(TEXT_KEY) != expected_chunks[index].page_content:
-                    errors.append(f"Indexed text mismatch for chunk {index}.")
+                else:
+                    if index in seen_indices:
+                        errors.append("Duplicate chunk positions were returned.")
+                    seen_indices.add(index)
+                    if chunk_id != _chunk_id(memory_id, index):
+                        errors.append(f"Indexed chunk ID mismatch for chunk {index}.")
+                    if payload.get(TEXT_KEY) != expected_chunks[index].page_content:
+                        errors.append(f"Indexed text mismatch for chunk {index}.")
 
     if record_count == 0:
         errors.append("No indexed records found for this memory.")
     if len(dimensions) > 1 or 0 in dimensions:
         errors.append("Indexed vectors have inconsistent dimensions.")
-    if expected_chunks is not None and record_count != len(expected_chunks):
-        errors.append("Indexed record count does not match expected chunks.")
+    if expected_chunks is not None:
+        if record_count != len(expected_chunks):
+            errors.append("Indexed record count does not match expected chunks.")
+        if seen_indices != set(range(len(expected_chunks))):
+            errors.append("Indexed chunk positions do not cover the expected range.")
 
     return {
         "valid": not errors, "memory_id": memory_id, "record_count": record_count,
