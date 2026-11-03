@@ -5,6 +5,7 @@ import io
 import json
 import uuid
 import wave
+import tempfile
 
 from langchain_groq import ChatGroq
 
@@ -678,189 +679,66 @@ def purge_orphaned_ingestion_records(
 # Demo Helpers
 # ============================================================
 
-def _create_demo_text_file(
-    file_name: str,
-    content: str,
-):
-    path = (
-        UPLOAD_DIR
-        / file_name
-    )
-
-    path.write_text(
-        content,
-        encoding="utf-8",
-    )
-
+def _create_demo_text_file(file_name: str, content: str, directory: Path) -> Path:
+    path = directory / file_name
+    path.write_text(content, encoding="utf-8")
     return path
 
 
-def _create_demo_pdf(
-    file_name: str,
-):
-    """
-    Create a small real PDF for the demo.
-    """
-
+def _create_demo_pdf(file_name: str, directory: Path) -> Path:
+    """Create a small real PDF for the demo in a temporary directory."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    path = (
-        UPLOAD_DIR
-        / file_name
-    )
-
-    pdf = canvas.Canvas(
-        str(path),
-        pagesize=A4,
-    )
-
-    pdf.setFont(
-        "Helvetica",
-        16,
-    )
-
-    pdf.drawString(
-        60,
-        800,
-        "Delhi Travel Plan",
-    )
-
-    pdf.setFont(
-        "Helvetica",
-        11,
-    )
-
+    path = directory / file_name
+    pdf = canvas.Canvas(str(path), pagesize=A4)
+    pdf.setFont("Helvetica", 16)
+    pdf.drawString(60, 800, "Delhi Travel Plan")
+    pdf.setFont("Helvetica", 11)
     lines = [
         "Travel destination: Delhi",
         "Flight: 6E123",
         "Travel date: 15 September 2026",
         "Hotel: Hotel ABC",
-        "Hotel stay: 15–18 September 2026",
+        "Hotel stay: 15-18 September 2026",
         "Important place: India Gate",
-        "Estimated hotel cost: ₹5,000 per night",
+        "Estimated hotel cost: INR 5,000 per night",
     ]
-
     y = 770
-
     for line in lines:
-
-        pdf.drawString(
-            60,
-            y,
-            line,
-        )
-
+        pdf.drawString(60, y, line)
         y -= 22
-
     pdf.save()
-
     return path
 
 
 def _create_demo_image(
-    file_name: str,
-    title: str,
-    lines: list[str],
-):
-    """
-    Create a real PNG demo image.
-
-    The generated image is still sent through the
-    normal image extraction pipeline.
-    """
-
+    file_name: str, title: str, lines: list[str], directory: Path
+) -> Path:
+    """Create a real PNG demo image in a temporary directory."""
     from PIL import Image, ImageDraw
 
-    path = (
-        UPLOAD_DIR
-        / file_name
-    )
-
-    image = Image.new(
-        "RGB",
-        (
-            1200,
-            700,
-        ),
-        "white",
-    )
-
-    draw = ImageDraw.Draw(
-        image
-    )
-
-    draw.text(
-        (70, 70),
-        title,
-        fill="black",
-    )
-
+    path = directory / file_name
+    image = Image.new("RGB", (1200, 700), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((70, 70), title, fill="black")
     y = 180
-
     for line in lines:
-
-        draw.text(
-            (90, y),
-            line,
-            fill="black",
-        )
-
+        draw.text((90, y), line, fill="black")
         y += 70
-
-    image.save(
-        path,
-        format="PNG",
-    )
-
+    image.save(path, format="PNG")
     return path
 
 
-def _create_demo_audio(
-    file_name: str,
-):
-    """
-    Create a valid WAV container for the demo.
-
-    The demo transcript is supplied through the same
-    memory indexing path below because generating
-    speech locally would require introducing a new
-    TTS dependency.
-    """
-
-    path = (
-        UPLOAD_DIR
-        / file_name
-    )
-
+def _create_demo_audio(file_name: str, directory: Path) -> Path:
+    """Create a valid, silent WAV container for the deterministic demo."""
+    path = directory / file_name
     sample_rate = 16000
-    duration_seconds = 1
-
-    frame_count = (
-        sample_rate
-        * duration_seconds
-    )
-
-    audio_data = (
-        b"\x00\x00"
-        * frame_count
-    )
-
-    with wave.open(
-        str(path),
-        "wb",
-    ) as audio:
-
+    with wave.open(str(path), "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
-        audio.setframerate(
-            sample_rate
-        )
-
-        audio.writeframes(
-            audio_data
-        )
-
+        audio.setframerate(sample_rate)
+        audio.writeframes(b"\\x00\\x00" * sample_rate)
     return path
 
 
@@ -871,50 +749,68 @@ def _create_memory_from_demo_text(
     extracted_text: str,
     user_id: str,
 ):
-    """
-    Create a demo memory and use the normal
-    chunk → embedding → Chroma indexing pipeline.
+    """Create a deterministic demo memory with both objects stored in R2."""
+    from ingestion.discovery import discover_upload
 
-    This is used only where an external extraction
-    service is not practical for deterministic demo
-    setup.
-    """
-
-    memory_id = str(
-        uuid.uuid4()
+    memory_id = str(uuid.uuid4())
+    descriptor = discover_upload(
+        file_path.name,
+        file_path.read_bytes(),
+        upload_dir=None,
+        source_id=memory_id,
+        max_file_size=MAX_FILE_SIZE,
     )
-
-    now = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    memory = Memory(
-        id=memory_id,
-        user_id=user_id,
-        memory_type=memory_type,
-        title=title,
-        file_name=file_path.name,
-        file_path=str(file_path),
-        summary=None,
-        extracted_text=extracted_text,
-        created_at=now,
-        updated_at=now,
+    original_key = build_memory_object_key(
+        user_id, memory_id, "original", f"source{descriptor.extension}"
     )
-
-    create_memory(
-        memory
+    extracted_key = build_memory_object_key(
+        user_id, memory_id, "extracted", "content.txt"
     )
+    memory_created = source_created = False
 
     try:
+        with file_path.open("rb") as source_stream:
+            upload_file(source_stream, original_key, descriptor.media_type)
+        upload_text(extracted_text, extracted_key)
 
-        chunks = split_text(
-            extracted_text
+        now = datetime.now(timezone.utc).isoformat()
+        memory = Memory(
+            id=memory_id,
+            user_id=user_id,
+            memory_type=memory_type,
+            title=title,
+            file_name=descriptor.file_name,
+            file_path=original_key,
+            summary=None,
+            extracted_text=None,
+            created_at=now,
+            updated_at=now,
+            original_file_key=original_key,
+            extracted_text_key=extracted_key,
         )
+        create_memory(memory)
+        memory_created = True
 
+        create_ingestion_source(
+            source_id=memory_id,
+            user_id=user_id,
+            original_file_name=descriptor.file_name,
+            extension=descriptor.extension,
+            media_type=descriptor.media_type,
+            size_bytes=descriptor.size_bytes,
+            sha256=descriptor.sha256,
+            status="validated",
+            memory_id=memory_id,
+            stored_file_path=original_key,
+            metadata_json=json.dumps(
+                {"extraction_method": "deterministic_demo"}, ensure_ascii=False
+            ),
+        )
+        source_created = True
+
+        chunks = split_text(extracted_text)
         if not chunks:
-            raise ValueError(
-                "No chunks could be created."
-            )
+            raise ValueError("No chunks could be created.")
 
         index_memory(
             memory_id=memory.id,
@@ -922,62 +818,60 @@ def _create_memory_from_demo_text(
             memory_type=memory.memory_type,
             chunks=chunks,
         )
+        if not update_ingestion_source(
+            memory_id,
+            user_id,
+            status="loaded",
+            memory_id=memory_id,
+            stored_file_path=original_key,
+            error_category=None,
+            error_message=None,
+        ):
+            raise RuntimeError("Demo ingestion source could not be marked as loaded.")
 
         return memory
 
     except Exception:
-
         try:
-
             delete_memory_index(memory_id)
-
         except Exception:
             pass
-
-        try:
-            file_path.unlink()
-        except Exception:
-            pass
-
-        try:
-
-            delete_memory_record(
-                memory_id,
-                user_id,
-            )
-
-        except Exception:
-            pass
-
+        if memory_created:
+            try:
+                delete_memory_record(memory_id, user_id)
+            except Exception:
+                pass
+        if source_created:
+            try:
+                update_ingestion_source(
+                    memory_id,
+                    user_id,
+                    memory_id=None,
+                    stored_file_path=None,
+                    status="failed",
+                    error_category="internal",
+                    error_message="Deterministic demo preparation failed.",
+                )
+            except Exception:
+                pass
+        for object_key in (extracted_key, original_key):
+            try:
+                delete_storage_file(object_key)
+            except Exception:
+                pass
         raise
 
 
-def load_demo_memories(
-    user_id: str,
-):
-    """
-    Create a repeatable demo environment.
-
-    Demo memories are identified using the [Demo]
-    title prefix. Existing demo memories are reused
-    rather than duplicated.
-    """
-
+def load_demo_memories(user_id: str):
+    """Create repeatable demo memories without retaining files on local disk."""
     if not user_id or not user_id.strip():
-        raise ValueError(
-            "User ID cannot be empty."
-        )
+        raise ValueError("User ID cannot be empty.")
 
-    existing_memories = list_memories(
-        user_id
-    )
-
+    existing_memories = list_memories(user_id)
     existing_demo_titles = {
         memory["title"]
         for memory in existing_memories
-        if memory["title"].startswith(
-            "[Demo]"
-        )
+        if memory["title"].startswith("[Demo]")
     }
 
     demo_definitions = [
@@ -985,284 +879,90 @@ def load_demo_memories(
             "title": "[Demo] Flight Ticket",
             "type": "image",
             "file_name": "demo_flight.png",
-            "text": (
-                "Flight ticket. "
-                "Flight number 6E123. "
-                "Route Hyderabad to Delhi. "
-                "Travel date 15 September 2026. "
-                "Ticket price ₹8,500."
-            ),
+            "text": "Flight ticket. Flight number 6E123. Route Hyderabad to Delhi. Travel date 15 September 2026. Ticket price INR 8,500.",
         },
         {
             "title": "[Demo] Hotel Booking",
             "type": "document",
             "file_name": "demo_hotel.txt",
-            "text": (
-                "Hotel booking. "
-                "Hotel ABC in Delhi. "
-                "Stay from 15 September 2026 "
-                "to 18 September 2026. "
-                "Room cost ₹5,000 per night."
-            ),
+            "text": "Hotel booking. Hotel ABC in Delhi. Stay from 15 September 2026 to 18 September 2026. Room cost INR 5,000 per night.",
         },
         {
             "title": "[Demo] Sony Headphones",
             "type": "image",
             "file_name": "demo_headphones.png",
-            "text": (
-                "Product information. "
-                "Sony headphones. "
-                "Listed price ₹25,000."
-            ),
+            "text": "Product information. Sony headphones. Listed price INR 25,000.",
         },
         {
             "title": "[Demo] Delhi Trip Voice Note",
             "type": "audio",
             "file_name": "demo_voice_note.wav",
-            "text": (
-                "Remember to visit India Gate "
-                "during the Delhi trip."
-            ),
+            "text": "Remember to visit India Gate during the Delhi trip.",
         },
         {
             "title": "[Demo] Delhi Travel Plan",
             "type": "document",
             "file_name": "demo_travel_plan.pdf",
-            "text": (
-                "Delhi travel plan. "
-                "Flight 6E123 from Hyderabad to Delhi "
-                "on 15 September 2026. "
-                "Hotel ABC from 15 to 18 September. "
-                "Remember to visit India Gate."
-            ),
+            "text": "Delhi travel plan. Flight 6E123 from Hyderabad to Delhi on 15 September 2026. Hotel ABC from 15 to 18 September. Remember to visit India Gate.",
         },
     ]
 
     created = []
+    with tempfile.TemporaryDirectory(prefix="memory-vault-demo-") as temp_dir:
+        demo_directory = Path(temp_dir)
 
-    for demo in demo_definitions:
+        for demo in demo_definitions:
+            if demo["title"] in existing_demo_titles:
+                continue
 
-        if demo["title"] in existing_demo_titles:
-            continue
+            file_name = demo["file_name"]
+            file_path = demo_directory / file_name
+            title = demo["title"]
 
-        file_name = demo[
-            "file_name"
-        ]
-
-        file_path = (
-            UPLOAD_DIR
-            / file_name
-        )
-
-        # ----------------------------------------------------
-        # Flight image
-        # ----------------------------------------------------
-
-        if demo["title"] == "[Demo] Flight Ticket":
-
-            _create_demo_image(
-                file_name=file_name,
-                title="Flight Ticket",
-                lines=[
-                    "IndiGo 6E123",
-                    "Hyderabad → Delhi",
-                    "15 September 2026",
-                    "₹8,500",
-                ],
-            )
-
-            # Use the actual image pipeline.
-            class DemoFile:
-
-                def __init__(
-                    self,
-                    path,
-                ):
-                    self.name = path.name
-
-                def getvalue(self):
-                    return file_path.read_bytes()
-
-            try:
-
-                memory = create_new_memory(
-                    uploaded_file=DemoFile(
-                        file_path
-                    ),
-                    title=demo["title"],
+            if title == "[Demo] Flight Ticket":
+                _create_demo_image(
+                    file_name, "Flight Ticket",
+                    ["IndiGo 6E123", "Hyderabad -> Delhi", "15 September 2026", "INR 8,500"],
+                    demo_directory,
+                )
+            elif title == "[Demo] Hotel Booking":
+                _create_demo_text_file(file_name, demo["text"], demo_directory)
+            elif title == "[Demo] Sony Headphones":
+                _create_demo_image(
+                    file_name, "Sony Headphones",
+                    ["Sony WH Series", "Premium Headphones", "Price: INR 25,000"],
+                    demo_directory,
+                )
+            elif title == "[Demo] Delhi Trip Voice Note":
+                _create_demo_audio(file_name, demo_directory)
+                memory = _create_memory_from_demo_text(
+                    title=title,
+                    file_path=file_path,
+                    memory_type="audio",
+                    extracted_text=demo["text"],
                     user_id=user_id,
                 )
-
-                created.append(
-                    memory
-                )
-
-            except Exception:
-
-                if file_path.exists():
-                    file_path.unlink()
-
-                raise
-
-        # ----------------------------------------------------
-        # Hotel text document
-        # ----------------------------------------------------
-
-        elif demo["title"] == "[Demo] Hotel Booking":
-
-            _create_demo_text_file(
-                file_name=file_name,
-                content=demo["text"],
-            )
+                created.append(memory)
+                continue
+            elif title == "[Demo] Delhi Travel Plan":
+                _create_demo_pdf(file_name, demo_directory)
 
             class DemoFile:
-
-                def __init__(
-                    self,
-                    path,
-                ):
+                def __init__(self, path: Path):
                     self.name = path.name
+                    self._path = path
 
                 def getvalue(self):
-                    return file_path.read_bytes()
+                    return self._path.read_bytes()
 
-            try:
-
-                memory = create_new_memory(
-                    uploaded_file=DemoFile(
-                        file_path
-                    ),
-                    title=demo["title"],
-                    user_id=user_id,
-                )
-
-                created.append(
-                    memory
-                )
-
-            except Exception:
-
-                if file_path.exists():
-                    file_path.unlink()
-
-                raise
-
-        # ----------------------------------------------------
-        # Product image
-        # ----------------------------------------------------
-
-        elif demo["title"] == "[Demo] Sony Headphones":
-
-            _create_demo_image(
-                file_name=file_name,
-                title="Sony Headphones",
-                lines=[
-                    "Sony WH Series",
-                    "Premium Headphones",
-                    "Price: ₹25,000",
-                ],
-            )
-
-            class DemoFile:
-
-                def __init__(
-                    self,
-                    path,
-                ):
-                    self.name = path.name
-
-                def getvalue(self):
-                    return file_path.read_bytes()
-
-            try:
-
-                memory = create_new_memory(
-                    uploaded_file=DemoFile(
-                        file_path
-                    ),
-                    title=demo["title"],
-                    user_id=user_id,
-                )
-
-                created.append(
-                    memory
-                )
-
-            except Exception:
-
-                if file_path.exists():
-                    file_path.unlink()
-
-                raise
-
-        # ----------------------------------------------------
-        # Voice note
-        # ----------------------------------------------------
-
-        elif demo["title"] == "[Demo] Delhi Trip Voice Note":
-
-            _create_demo_audio(
-                file_name=file_name
-            )
-
-            # A deterministic demo transcript is indexed
-            # through the normal chunk/embedding/index path.
-            memory = _create_memory_from_demo_text(
-                title=demo["title"],
-                file_path=file_path,
-                memory_type="audio",
-                extracted_text=demo["text"],
+            memory = create_new_memory(
+                uploaded_file=DemoFile(file_path),
+                title=title,
                 user_id=user_id,
             )
-
-            created.append(
-                memory
-            )
-
-        # ----------------------------------------------------
-        # Travel PDF
-        # ----------------------------------------------------
-
-        elif demo["title"] == "[Demo] Delhi Travel Plan":
-
-            _create_demo_pdf(
-                file_name=file_name
-            )
-
-            class DemoFile:
-
-                def __init__(
-                    self,
-                    path,
-                ):
-                    self.name = path.name
-
-                def getvalue(self):
-                    return file_path.read_bytes()
-
-            try:
-
-                memory = create_new_memory(
-                    uploaded_file=DemoFile(
-                        file_path
-                    ),
-                    title=demo["title"],
-                    user_id=user_id,
-                )
-
-                created.append(
-                    memory
-                )
-
-            except Exception:
-
-                if file_path.exists():
-                    file_path.unlink()
-
-                raise
+            created.append(memory)
 
     return created
-
 
 
 # ============================================================

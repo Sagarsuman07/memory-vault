@@ -29,7 +29,8 @@ class DuplicateReuseCandidateTests(unittest.TestCase):
 
         candidate_sql = connection.execute.call_args_list[0].args[0]
         self.assertIn("m.legacy_extracted_text IS NOT NULL", candidate_sql)
-        self.assertIn("TRIM(m.legacy_extracted_text) != ''", candidate_sql)
+        self.assertIn("m.extracted_text_key IS NOT NULL", candidate_sql)
+        self.assertIn("m.legacy_extracted_text IS NOT NULL", candidate_sql)
         self.assertNotIn("m.extracted_text", candidate_sql)
         self.assertEqual(candidates[0]["memory_id"], "source-memory")
         self.assertEqual(stale_count, 0)

@@ -11,6 +11,7 @@ from memory.memory_service import (
     generate_memory_summary,
     update_memory,
     delete_memory,
+    get_memory_extracted_text,
 )
 
 from storage.file_store import generate_signed_url
@@ -308,6 +309,44 @@ with summary_col:
 
                         except Exception as error:
                             st.toast(str(error), icon="❌")
+
+
+# ============================================================
+# Extracted Content
+# ============================================================
+
+extracted_text_state_key = f"extracted_content_{memory['id']}"
+show_extracted_text = extracted_text_state_key in st.session_state
+
+if st.button(
+    "Hide Extracted Content" if show_extracted_text else "View Extracted Content",
+    key=f"toggle_extracted_content_{memory['id']}",
+):
+    if show_extracted_text:
+        st.session_state.pop(extracted_text_state_key, None)
+    else:
+        try:
+            with st.spinner("Loading extracted content..."):
+                extracted_text = get_memory_extracted_text(
+                    memory_id=memory["id"],
+                    user_id=USER_ID,
+                )
+            if extracted_text and extracted_text.strip():
+                st.session_state[extracted_text_state_key] = extracted_text
+            else:
+                st.info("Extracted content is not available yet. Please wait for memory preparation to finish.")
+        except Exception:
+            st.error("Extracted content could not be loaded. Please try again.")
+
+if extracted_text_state_key in st.session_state:
+    st.caption("Normalized text extracted from the original file and used for memory retrieval.")
+    st.text_area(
+        "Extracted content",
+        value=st.session_state[extracted_text_state_key],
+        height=320,
+        disabled=True,
+        key=f"extracted_content_viewer_{memory['id']}",
+    )
 
 
 # ============================================================

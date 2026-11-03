@@ -25,12 +25,12 @@ class Phase6ContractTests(unittest.TestCase):
             validate_job_transition(JobStatus.SUCCEEDED, JobStatus.RUNNING)
 
     def test_extraction_failure_is_categorized_without_provider_error_text(self):
-        category, message = _classify_error(PipelineStage.EXTRACTION, RuntimeError("private provider payload"))
+        category, message = _classify_error(PipelineStage.EXTRACTION)
         self.assertEqual(category, PreparationErrorCategory.EXTRACTION)
         self.assertNotIn("private provider payload", message)
 
     def test_indexing_failure_is_categorized(self):
-        category, _ = _classify_error(PipelineStage.INDEXING, RuntimeError("boom"))
+        category, _ = _classify_error(PipelineStage.INDEXING)
         self.assertEqual(category, PreparationErrorCategory.INDEXING)
 
 
