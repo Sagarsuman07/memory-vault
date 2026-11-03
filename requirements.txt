@@ -1,34 +1,36 @@
-Pillow
-reportlab
-
-langsmith
-
-langgraph-checkpoint-sqlite
-
-langchain-tavily
-
-langchain-groq
-
-
-python-dotenv
-psycopg[binary,pool]>=3.2,<4
-langchain
-langchain-core
-langgraph
-sqlalchemy
-pydantic
-
-
+# Streamlit application
 streamlit==1.41.0
+python-dotenv
 
+# LangChain and LangGraph
+langchain-core
+langchain-text-splitters
+langchain-huggingface
+langchain-groq
+langchain-tavily
+langgraph
+langgraph-checkpoint-postgres
+langsmith
+typing-extensions
+
+# PostgreSQL connection pooling and LangGraph checkpoints
+psycopg[binary,pool]>=3.2,<4
+
+# Vector database and embeddings
+qdrant-client
+sentence-transformers
+
+# Multimodal ingestion
+Pillow
+PyMuPDF
+python-docx
 ollama
 groq
 
-PyMuPDF
-python-docx
-
-langchain-text-splitters
-langchain-huggingface
-sentence-transformers
-qdrant-client
+# Object storage
 boto3
+
+# PDF generation and evaluation reports
+reportlab
+pandas
+openpyxl
