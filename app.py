@@ -1,5 +1,16 @@
 import streamlit as st
 
+
+# ============================================================
+# Page Configuration
+# ============================================================
+
+st.set_page_config(
+    page_title="Memory Vault",
+    page_icon="🧠",
+    layout="wide",
+)
+
 from agent.graph import (
     create_thread_id as create_chat_thread_id,
     initialize_checkpointer,
@@ -20,15 +31,6 @@ from memory.memory_service import (
 )
 
 
-# ============================================================
-# Page Configuration
-# ============================================================
-
-st.set_page_config(
-    page_title="Memory Vault",
-    page_icon="🧠",
-    layout="wide",
-)
 
 require_private_access()
 initialize_database()

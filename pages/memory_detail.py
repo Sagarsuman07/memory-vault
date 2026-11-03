@@ -3,6 +3,17 @@ import mimetypes
 
 import streamlit as st
 
+
+# ============================================================
+# Page Configuration
+# ============================================================
+
+st.set_page_config(
+    page_title="Memory Detail",
+    page_icon="🧠",
+    layout="wide",
+)
+
 from config.settings import settings
 from security.access_control import require_private_access
 from database.database import get_connection, initialize_database
@@ -17,15 +28,6 @@ from memory.memory_service import (
 from storage.file_store import generate_signed_url
 
 
-# ============================================================
-# Page Configuration
-# ============================================================
-
-st.set_page_config(
-    page_title="Memory Detail",
-    page_icon="🧠",
-    layout="wide",
-)
 
 require_private_access()
 

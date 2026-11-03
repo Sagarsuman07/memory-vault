@@ -1,5 +1,5 @@
 # Streamlit application
-streamlit==1.41.0
+streamlit==1.66.0
 python-dotenv
 
 # LangChain and LangGraph

@@ -3,14 +3,6 @@ import wave
 
 import streamlit as st
 
-from config.settings import settings
-from security.access_control import require_private_access
-
-from database.database import initialize_database
-
-from memory.async_ingestion import enqueue_new_memory
-from database.database import get_connection
-
 
 # ============================================================
 # Page Configuration
@@ -21,6 +13,16 @@ st.set_page_config(
     page_icon="➕",
     layout="wide",
 )
+
+from config.settings import settings
+from security.access_control import require_private_access
+
+from database.database import initialize_database
+
+from memory.async_ingestion import enqueue_new_memory
+from database.database import get_connection
+
+
 
 require_private_access()
 

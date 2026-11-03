@@ -4,6 +4,17 @@ import time
 import streamlit as st
 
 
+# ============================================================
+# Page Configuration
+# ============================================================
+
+st.set_page_config(
+    page_title="Memory Vault Chat",
+    page_icon="🧠",
+    layout="wide",
+)
+
+
 from agent.graph import (
     create_thread_id,
     get_conversation_history,
@@ -27,15 +38,6 @@ from memory.memory_service import (
 from rag.grounding import DEFAULT_DISTANCE_THRESHOLD
 
 
-# ============================================================
-# Page Configuration
-# ============================================================
-
-st.set_page_config(
-    page_title="Memory Vault Chat",
-    page_icon="🧠",
-    layout="wide",
-)
 
 require_private_access()
 
