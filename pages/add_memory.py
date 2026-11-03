@@ -4,6 +4,7 @@ import wave
 import streamlit as st
 
 from config.settings import settings
+from security.access_control import require_private_access
 
 from database.database import initialize_database
 
@@ -20,6 +21,8 @@ st.set_page_config(
     page_icon="➕",
     layout="wide",
 )
+
+require_private_access()
 
 
 # ============================================================

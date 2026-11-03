@@ -4,6 +4,7 @@ import mimetypes
 import streamlit as st
 
 from config.settings import settings
+from security.access_control import require_private_access
 from database.database import get_connection, initialize_database
 
 from memory.memory_service import (
@@ -25,6 +26,8 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide",
 )
+
+require_private_access()
 
 initialize_database()
 

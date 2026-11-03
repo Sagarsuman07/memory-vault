@@ -6,6 +6,7 @@ from agent.graph import (
 )
 
 from config.settings import settings
+from security.access_control import require_private_access
 from database.database import initialize_database
 from memory.background_worker import start_background_worker
 from rag.vector_store import get_client as initialize_qdrant
@@ -29,6 +30,7 @@ st.set_page_config(
     layout="wide",
 )
 
+require_private_access()
 initialize_database()
 initialize_checkpointer()
 initialize_qdrant()
