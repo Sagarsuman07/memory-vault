@@ -1060,6 +1060,34 @@ def check_content_safety(
 
 
 # ============================================================
+# Extracted Content Retrieval
+# ============================================================
+
+def get_memory_extracted_text(
+    memory_id: str,
+    user_id: str,
+) -> str:
+    """Load extracted content from private object storage or legacy DB data."""
+    memory = get_memory_by_id(
+        memory_id,
+        user_id,
+    )
+
+    extracted_text_key = memory.get("extracted_text_key")
+    if extracted_text_key:
+        extracted_text = download_text(extracted_text_key)
+    else:
+        # Backward compatibility for memories created before extracted text
+        # was moved from PostgreSQL metadata into private object storage.
+        extracted_text = memory.get("extracted_text") or ""
+
+    if not isinstance(extracted_text, str):
+        raise ValueError("Stored extracted content is not valid text.")
+
+    return extracted_text
+
+
+# ============================================================
 # Generate Summary
 # ============================================================
 
@@ -1068,12 +1096,10 @@ def generate_memory_summary(
     user_id: str,
 ):
 
-    memory = get_memory_by_id(
+    extracted_text = get_memory_extracted_text(
         memory_id,
         user_id,
     )
-
-    extracted_text = get_memory_extracted_text(memory_id, user_id)
 
     if (
         not extracted_text
