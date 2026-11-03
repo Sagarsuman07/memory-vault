@@ -11,7 +11,9 @@ from memory.background_worker import start_background_worker
 from rag.vector_store import get_client as initialize_qdrant
 
 from memory.memory_service import (
-    list_memories,
+    list_memories_page,
+    count_memories_by_type,
+    get_existing_memory_ids,
     delete_memories,
     load_demo_memories,
 )
@@ -306,27 +308,11 @@ st.markdown(
 # Load Memories
 # ============================================================
 
-memories = list_memories(
-    USER_ID
+# Validate selected IDs only; avoid loading every memory on each rerun.
+st.session_state.selected_memory_ids = get_existing_memory_ids(
+    USER_ID,
+    st.session_state.get("selected_memory_ids", set()),
 )
-
-
-# ============================================================
-# Remove Invalid Selections
-# ============================================================
-
-valid_memory_ids = {
-    memory["id"]
-    for memory in memories
-}
-
-st.session_state.selected_memory_ids = {
-    memory_id
-    for memory_id
-    in st.session_state.selected_memory_ids
-    if memory_id
-    in valid_memory_ids
-}
 
 
 # ============================================================
@@ -658,30 +644,11 @@ with st.container(
     # Counts
     # ========================================================
 
-    all_count = len(
-        memories
-    )
-
-    photo_count = len(
-        filter_by_type(
-            memories,
-            "image",
-        )
-    )
-
-    document_count = len(
-        filter_by_type(
-            memories,
-            "document",
-        )
-    )
-
-    voice_count = len(
-        filter_by_type(
-            memories,
-            "audio",
-        )
-    )
+    memory_counts = count_memories_by_type(USER_ID, search_text)
+    all_count = memory_counts["all_count"]
+    photo_count = memory_counts["photo_count"]
+    document_count = memory_counts["document_count"]
+    voice_count = memory_counts["voice_count"]
 
 
     # ========================================================
@@ -707,159 +674,95 @@ with st.container(
 # Memory Card Grid
 # ============================================================
 
-def render_memory_grid(
-    tab_memories,
-    tab_name: str,
-):
+def render_memory_grid(memory_type, tab_name: str):
+    page_key = f"memory_page_{tab_name}"
+    search_key = f"{page_key}_search"
+    if st.session_state.get(search_key) != search_text:
+        st.session_state[page_key] = 1
+        st.session_state[search_key] = search_text
 
-    filtered_memories = filter_by_title(
-        tab_memories,
-        search_text,
+    count_key = {
+        "All": "all_count", "Photos": "photo_count",
+        "Documents": "document_count", "Voice": "voice_count",
+    }[tab_name]
+    total_count = memory_counts[count_key]
+    page_size = 20
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    page = min(max(1, st.session_state.get(page_key, 1)), total_pages)
+    st.session_state[page_key] = page
+    offset = (page - 1) * page_size
+
+    page_memories = list_memories_page(
+        USER_ID, limit=page_size, offset=offset,
+        memory_type=memory_type, search_text=search_text,
     )
-
-
-    if not filtered_memories:
-
+    if not page_memories:
         if search_text:
-
-            st.info(
-                "No memories match your title search."
-            )
-
+            st.info("No memories match your title search.")
         else:
-
             st.info(
-                f"No {tab_name.lower()} memories found, Please add memories or load demo memories by opening sidebar (Click Top left >> button)"
+                f"No {tab_name.lower()} memories found. Please add memories "
+                "or load demo memories from the sidebar."
             )
-
         return
 
-
     st.caption(
-        (
-            f"Showing {len(filtered_memories)} "
-            f"{tab_name.lower()}."
-        )
+        f"Showing {offset + 1}–{offset + len(page_memories)} of "
+        f"{total_count} {tab_name.lower()} memories."
     )
-
-
     columns = st.columns(3)
-
-
-    for index, memory in enumerate(
-        filtered_memories
-    ):
-
-        column = columns[
-            index % 3
-        ]
-
-
-        with column:
-
-            with st.container(
-                border=True
-            ):
-
-                icon = get_type_icon(
-                    memory["memory_type"]
-                )
-
-                type_label = get_type_label(
-                    memory["memory_type"]
-                )
-
-
-                st.markdown(
-                    f"### {icon} {type_label}"
-                )
-
-
-                st.write(
-                    f"**{memory['title']}**"
-                )
-
-
-                st.caption(
-                    format_date(
-                        memory["created_at"]
-                    )
-                )
-
-
-                preview = (
-                    get_summary_preview(
-                        memory
-                    )
-                )
-
-
+    for index, memory in enumerate(page_memories):
+        with columns[index % 3]:
+            with st.container(border=True):
+                icon = get_type_icon(memory["memory_type"])
+                type_label = get_type_label(memory["memory_type"])
+                st.markdown(f"### {icon} {type_label}")
+                st.write(f"**{memory['title']}**")
+                st.caption(format_date(memory["created_at"]))
+                preview = get_summary_preview(memory)
                 if preview:
-
-                    st.write(
-                        preview
-                    )
-
+                    st.write(preview)
                 else:
+                    st.caption("Open memory to generate summary")
 
-                    st.caption(
-                        "Open memory to generate summary"
-                    )
-
-
-                if st.session_state.get(
-                    "edit_memories_mode",
-                    False,
-                ):
-
-                    checkbox_key = (
-                        f"select_"
-                        f"{tab_name}_"
-                        f"{memory['id']}"
-                    )
-
-
-                    if checkbox_key not in (
-                        st.session_state
-                    ):
-
-                        st.session_state[
-                            checkbox_key
-                        ] = (
-                            memory["id"]
-                            in st.session_state.get(
-                                "selected_memory_ids",
-                                set(),
+                if st.session_state.get("edit_memories_mode", False):
+                    checkbox_key = f"select_{tab_name}_{memory['id']}"
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = (
+                            memory["id"] in st.session_state.get(
+                                "selected_memory_ids", set()
                             )
                         )
-
-
                     st.checkbox(
-                        "Select",
-                        key=checkbox_key,
-                        on_change=(
-                            sync_memory_selection
-                        ),
-                        args=(
-                            memory["id"],
-                            checkbox_key,
-                        ),
+                        "Select", key=checkbox_key,
+                        on_change=sync_memory_selection,
+                        args=(memory["id"], checkbox_key),
                     )
-
 
                 if st.button(
-                    "Open Memory →",
-                    key=(
-                        f"open_"
-                        f"{tab_name}_"
-                        f"{memory['id']}"
-                    ),
+                    "Open Memory →", key=f"open_{tab_name}_{memory['id']}",
                     use_container_width=True,
                 ):
+                    open_memory(memory["id"])
 
-                    open_memory(
-                        memory["id"]
-                    )
+    if total_pages > 1:
+        previous_col, page_col, next_col = st.columns([1, 2, 1])
+        with previous_col:
+            if st.button(
+                "← Previous", key=f"{page_key}_previous",
+                disabled=page <= 1, use_container_width=True,
+            ):
+                st.session_state[page_key] = page - 1
+                st.rerun()
+        with page_col:
+            st.caption(f"Page {page} of {total_pages}")
+        with next_col:
+            if st.button(
+                "Next →", key=f"{page_key}_next",
+                disabled=page >= total_pages, use_container_width=True,
+            ):
+                st.session_state[page_key] = page + 1
+                st.rerun()
 
 
 # ============================================================
@@ -867,41 +770,16 @@ def render_memory_grid(
 # ============================================================
 
 with all_tab:
-
-    render_memory_grid(
-        memories,
-        "All",
-    )
+    render_memory_grid(None, "All")
 
 
 with photo_tab:
-
-    render_memory_grid(
-        filter_by_type(
-            memories,
-            "image",
-        ),
-        "Photos",
-    )
+    render_memory_grid("image", "Photos")
 
 
 with document_tab:
-
-    render_memory_grid(
-        filter_by_type(
-            memories,
-            "document",
-        ),
-        "Documents",
-    )
+    render_memory_grid("document", "Documents")
 
 
 with voice_tab:
-
-    render_memory_grid(
-        filter_by_type(
-            memories,
-            "audio",
-        ),
-        "Voice",
-    )
+    render_memory_grid("audio", "Voice")

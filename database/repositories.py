@@ -75,6 +75,83 @@ def get_all_memories(user_id: str):
         connection.close()
 
 
+def list_memories_page(
+    user_id: str, *, limit: int = 20, offset: int = 0,
+    memory_type: str | None = None, search_text: str | None = None,
+):
+    """Fetch a small, newest-first page of memory cards."""
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise ValueError("Invalid memory page size or offset.")
+
+    conditions, params = ["user_id = ?"], [user_id]
+    if memory_type:
+        conditions.append("memory_type = ?")
+        params.append(memory_type)
+    if search_text and search_text.strip():
+        conditions.append("title ILIKE ?")
+        params.append(f"%{search_text.strip()}%")
+
+    query = (
+        "SELECT id, user_id, memory_type, title, file_name, "
+        "original_file_key, extracted_text_key, legacy_file_path, "
+        "summary, created_at, updated_at FROM memories WHERE "
+        + " AND ".join(conditions)
+        + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    )
+    params.extend((limit, offset))
+    connection = get_connection()
+    try:
+        return [_memory_from_row(row) for row in connection.execute(
+            query, tuple(params)
+        ).fetchall()]
+    finally:
+        connection.close()
+
+
+def count_memories_by_type(user_id: str, search_text: str | None = None) -> dict[str, int]:
+    """Return dashboard tab counts using one aggregate query."""
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    query = """
+        SELECT COUNT(*) AS all_count,
+               COUNT(*) FILTER (WHERE memory_type = 'image') AS photo_count,
+               COUNT(*) FILTER (WHERE memory_type = 'document') AS document_count,
+               COUNT(*) FILTER (WHERE memory_type = 'audio') AS voice_count
+        FROM memories WHERE user_id = ?
+    """
+    params = [user_id]
+    if search_text and search_text.strip():
+        query += " AND title ILIKE ?"
+        params.append(f"%{search_text.strip()}%")
+    connection = get_connection()
+    try:
+        row = connection.execute(query, tuple(params)).fetchone()
+        return {key: int(row[key] or 0) for key in (
+            "all_count", "photo_count", "document_count", "voice_count"
+        )}
+    finally:
+        connection.close()
+
+
+def get_existing_memory_ids(user_id: str, memory_ids) -> set[str]:
+    """Validate selected IDs without fetching all memory records."""
+    ids = list(set(memory_ids or ()))
+    if not ids:
+        return set()
+    placeholders = ", ".join("?" for _ in ids)
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            f"SELECT id FROM memories WHERE user_id = ? AND id IN ({placeholders})",
+            (user_id, *ids),
+        ).fetchall()
+        return {row["id"] for row in rows}
+    finally:
+        connection.close()
+
+
 def update_memory(memory_id: str, user_id: str, title: str, summary: str):
     connection = get_connection()
     try:

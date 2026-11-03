@@ -20,6 +20,9 @@ from database.repositories import (
     create_memory,
     get_memory,
     get_all_memories,
+    list_memories_page as list_memories_page_record,
+    count_memories_by_type as count_memories_by_type_record,
+    get_existing_memory_ids as get_existing_memory_ids_record,
     update_memory as update_memory_record,
     delete_memory as delete_memory_record,
     create_ingestion_source,
@@ -305,6 +308,30 @@ def list_memories(
         key=lambda memory: memory["created_at"],
         reverse=True,
     )
+
+
+def list_memories_page(
+    user_id: str, *, limit: int = 20, offset: int = 0,
+    memory_type: str | None = None, search_text: str | None = None,
+):
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    return list_memories_page_record(
+        user_id, limit=limit, offset=offset,
+        memory_type=memory_type, search_text=search_text,
+    )
+
+
+def count_memories_by_type(user_id: str, search_text: str | None = None):
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    return count_memories_by_type_record(user_id, search_text)
+
+
+def get_existing_memory_ids(user_id: str, memory_ids):
+    if not user_id or not user_id.strip():
+        raise ValueError("User ID cannot be empty.")
+    return get_existing_memory_ids_record(user_id, memory_ids)
 
 
 # ============================================================
