@@ -39,9 +39,9 @@ _STOP_EVENT = threading.Event()
 def _worker_count() -> int:
     """Read bounded concurrency from settings; at least one worker is required."""
     try:
-        configured = int(getattr(settings, "INGESTION_WORKER_CONCURRENCY", 2))
+        configured = int(getattr(settings, "INGESTION_WORKER_CONCURRENCY", 1))
     except (TypeError, ValueError):
-        configured = 2
+        configured = 1
     return max(1, min(configured, 8))
 
 
