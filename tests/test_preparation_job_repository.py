@@ -50,12 +50,10 @@ class _FakeConnection:
             }
             return _Cursor()
         if normalized.startswith("SELECT * FROM preparation_jobs"):
-            if "WHERE user_id = ?" in normalized:
-                if self.job is None or params[0] != self.job["user_id"]:
-                    return _Cursor(rows=[])
-                return _Cursor(rows=[dict(self.job)])
             if self.job is None or (params[0], params[1]) != (self.job["id"], self.job["user_id"]):
                 return _Cursor(None)
+            if "WHERE user_id = ?" in normalized:
+                return _Cursor(rows=[dict(self.job)])
             return _Cursor(dict(self.job))
         if normalized.startswith("UPDATE preparation_jobs"):
             if self.job is None:

@@ -28,6 +28,7 @@ class DuplicateReuseCandidateTests(unittest.TestCase):
         )
 
         candidate_sql = connection.execute.call_args_list[0].args[0]
+        self.assertIn("m.legacy_extracted_text IS NOT NULL", candidate_sql)
         self.assertIn("m.extracted_text_key IS NOT NULL", candidate_sql)
         self.assertIn("m.legacy_extracted_text IS NOT NULL", candidate_sql)
         self.assertNotIn("m.extracted_text", candidate_sql)

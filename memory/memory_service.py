@@ -738,7 +738,7 @@ def _create_demo_audio(file_name: str, directory: Path) -> Path:
         audio.setnchannels(1)
         audio.setsampwidth(2)
         audio.setframerate(sample_rate)
-        audio.writeframes(b"\\x00\\x00" * sample_rate)
+        audio.writeframes(b"\x00\x00" * sample_rate)
     return path
 
 
