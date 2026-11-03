@@ -22,9 +22,6 @@ class Settings:
         "demo_user",
     )
 
-    # Required for shared-demo hosting; store only in environment/secrets.
-    APP_ACCESS_PASSWORD = _read_secret.__func__("APP_ACCESS_PASSWORD")
-
     DATABASE_PATH = os.getenv(
         "DATABASE_PATH",
         "memory_vault.db",
@@ -46,6 +43,9 @@ class Settings:
             return st.secrets.get(name, default)
         except Exception:
             return default
+
+    # Required for shared-demo hosting; store only in environment/secrets.
+    APP_ACCESS_PASSWORD = _read_secret.__func__("APP_ACCESS_PASSWORD")
 
     DATABASE_URL = _read_secret.__func__("DATABASE_URL")
 
